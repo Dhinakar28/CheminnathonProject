@@ -1,0 +1,6 @@
+{
+  "file": "C:\\ChemProj3\\CheminnathonProject\\data\\raw\\train_FD002.txt",
+  "n_samples": 53759,
+  "n_features": 26,
+  "n_anomalies": 538
+}

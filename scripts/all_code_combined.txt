@@ -1,0 +1,1414 @@
+# File: src/__init__.py
+"""src package for CheminnathonProject utilities"""
+
+__all__ = ["data_loader", "preprocess", "train", "predict"]
+
+__________
+# File: src/data_loader.py
+"""
+Utilities to discover and load datasets from the repository `raw` folders (.csv and .mat).
+"""
+from pathlib import Path
+import pandas as pd
+import numpy as np
+from scipy import io
+
+RAW_FOLDERS = [Path(__file__).resolve().parents[1] / "data" / "raw",
+               Path(__file__).resolve().parents[1] / "raw"]
+
+
+def find_raw_files(exts=(".csv", ".mat", ".txt", ".dat")):
+    """Return list of raw files (csv and mat) found in project-level raw folders."""
+    files = []
+    for d in RAW_FOLDERS:
+        if d.exists():
+            for ext in exts:
+                files.extend(list(d.rglob(f"*{ext}")))
+    return sorted(files)
+
+
+def load_csv(path):
+    path = Path(path)
+    df = pd.read_csv(path)
+    return df
+
+
+def load_txt(path):
+    """Load whitespace-delimited text files. If the file has no header and resembles
+    the CMAPSS format (unit, cycle, 3 settings, many sensors), assign meaningful names.
+    Otherwise return a DataFrame with generic column names.
+    """
+    path = Path(path)
+    # try reading with a regex separator; do not treat first row as header
+    try:
+        df = pd.read_csv(path, sep=r"\s+", header=None, comment="#", engine='python', encoding='utf-8')
+    except Exception:
+        # fallback to latin1 if utf-8 decoding fails
+        try:
+            df = pd.read_csv(path, sep=r"\s+", header=None, comment="#", engine='python', encoding='latin1')
+        except Exception:
+            # last-resort: let pandas try with default settings
+            df = pd.read_csv(path, sep=r"\s+", header=None, engine='python')
+
+    # if file already has a header-like first row (non-numeric tokens), try to read header
+    # inspect first line
+    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+        first = f.readline().strip()
+    has_header = any(not tok.replace('.', '', 1).lstrip('-').isdigit() for tok in first.split())
+    if has_header:
+        try:
+            try:
+                df2 = pd.read_csv(path, sep=r"\s+", header=0, comment="#", engine='python', encoding='utf-8')
+            except Exception:
+                df2 = pd.read_csv(path, sep=r"\s+", header=0, comment="#", engine='python', encoding='latin1')
+            return df2
+        except Exception:
+            pass
+
+    # If number of columns looks like CMAPSS (>=5), name them: unit, cycle, setting1..3, s1..sN
+    ncol = df.shape[1]
+    if ncol >= 5:
+        names = []
+        names.append('unit')
+        names.append('cycle')
+        # next three operational settings (may not exist; handle if less)
+        n_settings = min(3, max(0, ncol - 2 - 1))
+        for i in range(1, 4):
+            if 2 + i - 1 < ncol:
+                names.append(f'operational_setting_{i}')
+        # remaining are sensors
+        sensors_start = len(names)
+        n_sensors = ncol - sensors_start
+        for i in range(1, n_sensors + 1):
+            names.append(f's{i}')
+        # if names length mismatch, fallback to generic
+        if len(names) == ncol:
+            df.columns = names
+            return df
+
+    # generic column names
+    df.columns = [f'c{i}' for i in range(ncol)]
+    return df
+
+
+def _mat_to_df(matdict):
+    # heuristics: find the first array with 2D shape where rows >= cols
+    for k, v in matdict.items():
+        if k.startswith("__"):
+            continue
+        if isinstance(v, np.ndarray):
+            if v.ndim == 2:
+                arr = v
+                # convert to dataframe columns
+                cols = [f"c{i}" for i in range(arr.shape[1])]
+                try:
+                    return pd.DataFrame(arr, columns=cols)
+                except Exception:
+                    return pd.DataFrame(arr)
+    # fallback: try to convert any ndarray
+    for k, v in matdict.items():
+        if isinstance(v, np.ndarray):
+            return pd.DataFrame(v)
+    # nothing convertible
+    return pd.DataFrame()
+
+
+def load_mat(path):
+    path = Path(path)
+    mat = io.loadmat(path)
+    df = _mat_to_df(mat)
+    return df
+
+
+def load_any(path):
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(path)
+    if p.suffix.lower() == ".csv":
+        return load_csv(p)
+    if p.suffix.lower() == ".mat":
+        return load_mat(p)
+    if p.suffix.lower() in (".txt", ".dat"):
+        return load_txt(p)
+    raise ValueError("Unsupported file type: %s" % p.suffix)
+
+__________
+# File: src/preprocess.py
+"""
+Preprocessing utilities: cleaning, simple feature engineering and scaling.
+Designed to be robust to heterogeneous sensor datasets.
+"""
+from pathlib import Path
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+
+
+def basic_clean(df: pd.DataFrame, drop_threshold=0.5):
+    """Drop columns with too many missing values, forward/backfill small gaps, convert non-numeric if possible."""
+    df = df.copy()
+    # coerce to numeric where possible
+    for col in df.columns:
+        if df[col].dtype == object:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    # drop columns with > drop_threshold fraction missing
+    miss_frac = df.isna().mean()
+    keep_cols = miss_frac[miss_frac <= drop_threshold].index.tolist()
+    df = df[keep_cols]
+    # small-gap interpolation
+    df = df.interpolate(limit_direction="both", limit=10)
+    # final fill (use ffill/bfill to avoid deprecated fillna(method=...))
+    df = df.ffill().bfill().fillna(0)
+    return df
+
+
+def add_rolling_features(df: pd.DataFrame, windows=(3, 5, 10)):
+    df = df.copy()
+    for w in windows:
+        df_rolled = df.rolling(window=w, min_periods=1).agg(["mean", "std"])
+        # flatten multiindex
+        df_rolled.columns = [f"{c[0]}_r{w}_{c[1]}" for c in df_rolled.columns]
+        df = pd.concat([df, df_rolled], axis=1)
+    return df
+
+
+def add_lag_features(df: pd.DataFrame, lags=(1, 2, 3)):
+    df = df.copy()
+    for lag in lags:
+        shifted = df.shift(lag)
+        shifted.columns = [f"{c}_lag{lag}" for c in df.columns]
+        df = pd.concat([df, shifted], axis=1)
+    df = df.fillna(0)
+    return df
+
+
+def extract_features(df: pd.DataFrame):
+    df = df.copy()
+    numeric = df.select_dtypes(include=[np.number])
+    # simple statistics
+    stats = pd.DataFrame({
+        "_mean": numeric.mean(),
+        "_std": numeric.std(),
+        "_min": numeric.min(),
+        "_max": numeric.max()
+    }).T
+    # but keep time-series features per-row via rolling and lag
+    df = add_rolling_features(numeric)
+    df = add_lag_features(df)
+    return df
+
+
+def scale_features(X: pd.DataFrame, scaler: StandardScaler = None):
+    if scaler is None:
+        scaler = StandardScaler()
+        Xs = scaler.fit_transform(X)
+    else:
+        Xs = scaler.transform(X)
+    Xs = pd.DataFrame(Xs, index=X.index, columns=X.columns)
+    return Xs, scaler
+
+
+def preprocess_pipeline(df: pd.DataFrame, do_feature_engineering=True):
+    df = basic_clean(df)
+    if do_feature_engineering:
+        # attempt the full feature engineering, but guard against explosive feature counts
+        df_fe = extract_features(df)
+        # if number of features explodes (e.g., > 500), fall back to a lightweight set
+        MAX_FEATURES = 500
+        if df_fe.shape[1] > MAX_FEATURES:
+            # lightweight fallback: rolling mean/std with small window and a single lag
+            numeric = df.select_dtypes(include=[np.number])
+            df_roll = numeric.rolling(window=3, min_periods=1).agg(["mean", "std"])
+            df_roll.columns = [f"{c[0]}_r3_{c[1]}" for c in df_roll.columns]
+            lag1 = numeric.shift(1).fillna(0)
+            lag1.columns = [f"{c}_lag1" for c in numeric.columns]
+            df_light = pd.concat([numeric, df_roll, lag1], axis=1)
+            df = df_light
+        else:
+            df = df_fe
+    # remove constant columns
+    df = df.loc[:, df.nunique() > 1]
+    return df
+
+
+def save_processed(df: pd.DataFrame, out_path: str):
+    p = Path(out_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(p, index=False)
+    return p
+
+__________
+# File: src/core_trainers.py
+"""
+Core trainer functions (no CLI). These are safe to import and call programmatically.
+"""
+from pathlib import Path
+import joblib
+import json
+import numpy as np
+import pandas as pd
+
+from sklearn.ensemble import RandomForestRegressor, RandomForestClassifier, IsolationForest
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_error, accuracy_score, f1_score, precision_score, recall_score
+
+from .data_loader import load_any, find_raw_files
+from .preprocess import preprocess_pipeline, scale_features
+
+
+def train_regression(file: str, target: str, outdir: str = 'models_reg', test_size: float = 0.2, n_estimators: int = 50, n_jobs: int = 1, feature_engineering: bool = True):
+    p = Path(file)
+    df = load_any(p)
+    df_proc = preprocess_pipeline(df, do_feature_engineering=feature_engineering)
+    # find target
+    if target not in df_proc.columns:
+        possible = [c for c in df_proc.columns if target.lower() in c.lower()]
+        if possible:
+            target_col = possible[0]
+        else:
+            raise ValueError(f'Target {target} not found')
+    else:
+        target_col = target
+
+    X = df_proc.drop(columns=[target_col]).select_dtypes(include=[np.number]).fillna(0)
+    y = df_proc[target_col]
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+    X_train_s, scaler = scale_features(X_train)
+    X_test_s, _ = scale_features(X_test, scaler=scaler)
+
+    model = RandomForestRegressor(n_estimators=n_estimators, random_state=42, n_jobs=n_jobs)
+    model.fit(X_train_s, y_train)
+    y_pred = model.predict(X_test_s)
+    metrics = {'rmse': float(np.sqrt(mean_squared_error(y_test, y_pred))), 'mae': float(mean_absolute_error(y_test, y_pred))}
+
+    outp = Path(outdir)
+    outp.mkdir(parents=True, exist_ok=True)
+    model_path = outp / f"{p.stem}__{target_col.replace(' ', '_')}__rf.joblib"
+    scaler_path = outp / f"{p.stem}__{target_col.replace(' ', '_')}__scaler.joblib"
+    meta_path = outp / f"{p.stem}__{target_col.replace(' ', '_')}__meta.json"
+
+    joblib.dump(model, model_path)
+    joblib.dump(scaler, scaler_path)
+    with open(meta_path, 'w') as f:
+        json.dump({'file': str(p), 'target': target_col, 'metrics': metrics, 'model_path': str(model_path), 'scaler_path': str(scaler_path)}, f, indent=2)
+
+    return {'model': str(model_path), 'scaler': str(scaler_path), 'metrics': metrics}
+
+
+def train_classification(file: str, target: str, outdir: str = 'models_clf', test_size: float = 0.2, n_estimators: int = 50, n_jobs: int = 1, feature_engineering: bool = True):
+    p = Path(file)
+    df = load_any(p)
+    df_proc = preprocess_pipeline(df, do_feature_engineering=feature_engineering)
+    if target not in df_proc.columns:
+        possible = [c for c in df_proc.columns if target.lower() in c.lower()]
+        if possible:
+            target_col = possible[0]
+        else:
+            raise ValueError(f'Target {target} not found')
+    else:
+        target_col = target
+
+    X = df_proc.drop(columns=[target_col]).select_dtypes(include=[np.number]).fillna(0)
+    y = df_proc[target_col]
+
+    if y.dtype.kind in 'fc':
+        y = y.round().astype(int)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y if len(np.unique(y))>1 else None)
+    X_train_s, scaler = scale_features(X_train)
+    X_test_s, _ = scale_features(X_test, scaler=scaler)
+
+    clf = RandomForestClassifier(n_estimators=n_estimators, random_state=42, n_jobs=n_jobs)
+    clf.fit(X_train_s, y_train)
+    y_pred = clf.predict(X_test_s)
+
+    metrics = {'accuracy': float(accuracy_score(y_test, y_pred)), 'f1_macro': float(f1_score(y_test, y_pred, average='macro', zero_division=0))}
+
+    outp = Path(outdir)
+    outp.mkdir(parents=True, exist_ok=True)
+    model_path = outp / f"{p.stem}__{target_col.replace(' ', '_')}__rf_clf.joblib"
+    scaler_path = outp / f"{p.stem}__{target_col.replace(' ', '_')}__scaler.joblib"
+    meta_path = outp / f"{p.stem}__{target_col.replace(' ', '_')}__meta.json"
+
+    joblib.dump(clf, model_path)
+    joblib.dump(scaler, scaler_path)
+    with open(meta_path, 'w') as f:
+        json.dump({'file': str(p), 'target': target_col, 'metrics': metrics, 'model_path': str(model_path), 'scaler_path': str(scaler_path)}, f, indent=2)
+
+    return {'model': str(model_path), 'scaler': str(scaler_path), 'metrics': metrics}
+
+
+def train_anomaly_model(file: str, outdir: str = 'models_anom', contamination: float = 0.01, feature_engineering: bool = True):
+    p = Path(file)
+    df = load_any(p)
+    df_proc = preprocess_pipeline(df, do_feature_engineering=feature_engineering)
+    X = df_proc.select_dtypes(include=[np.number]).fillna(0)
+    Xs, scaler = scale_features(X)
+    iso = IsolationForest(contamination=contamination, random_state=42)
+    iso.fit(Xs)
+
+    outp = Path(outdir)
+    outp.mkdir(parents=True, exist_ok=True)
+    model_path = outp / f"{p.stem}__isof.joblib"
+    scaler_path = outp / f"{p.stem}__scaler.joblib"
+    meta_path = outp / f"{p.stem}__meta.json"
+    joblib.dump(iso, model_path)
+    joblib.dump(scaler, scaler_path)
+
+    scores = iso.decision_function(Xs)
+    preds = iso.predict(Xs)
+    n_anom = int((preds == -1).sum())
+    meta = {'file': str(p), 'n_samples': int(Xs.shape[0]), 'n_features': int(Xs.shape[1]), 'n_anomalies': n_anom}
+    with open(meta_path, 'w') as f:
+        json.dump(meta, f, indent=2)
+
+    return {'model': str(model_path), 'scaler': str(scaler_path), 'meta': meta}
+
+
+def train_rul_model(file: str, id_col: str, cycle_col: str, outdir: str = 'models_rul', n_estimators: int = 10, n_jobs: int = 1, feature_engineering: bool = True):
+    # reuse train_rul logic but simplified
+    p = Path(file)
+    df = load_any(p)
+    if id_col not in df.columns or cycle_col not in df.columns:
+        raise ValueError('id_col or cycle_col not present')
+    df2 = df.copy()
+    df2['_rul_unit_max'] = df2.groupby(id_col)[cycle_col].transform('max')
+    df2['RUL'] = df2['_rul_unit_max'] - df2[cycle_col]
+
+    df_proc = preprocess_pipeline(df2.drop(columns=[id_col, cycle_col]), do_feature_engineering=feature_engineering)
+    if 'RUL' not in df_proc.columns:
+        df_proc = pd.concat([df_proc.reset_index(drop=True), df2['RUL'].reset_index(drop=True)], axis=1)
+
+    X = df_proc.drop(columns=['RUL']).select_dtypes(include=[np.number]).fillna(0)
+    y = df_proc['RUL']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train_s, scaler = scale_features(X_train)
+    X_test_s, _ = scale_features(X_test, scaler=scaler)
+    model = RandomForestRegressor(n_estimators=n_estimators, random_state=42, n_jobs=n_jobs)
+    model.fit(X_train_s, y_train)
+    y_pred = model.predict(X_test_s)
+    metrics = {'rmse': float(np.sqrt(mean_squared_error(y_test, y_pred))), 'mae': float(mean_absolute_error(y_test, y_pred))}
+
+    outp = Path(outdir)
+    outp.mkdir(parents=True, exist_ok=True)
+    model_path = outp / f"{p.stem}__RUL__rf.joblib"
+    scaler_path = outp / f"{p.stem}__RUL__scaler.joblib"
+    meta_path = outp / f"{p.stem}__RUL__meta.json"
+    joblib.dump(model, model_path)
+    joblib.dump(scaler, scaler_path)
+    with open(meta_path, 'w') as f:
+        json.dump({'file': str(p), 'metrics': metrics, 'model_path': str(model_path), 'scaler_path': str(scaler_path)}, f, indent=2)
+    return {'model': str(model_path), 'scaler': str(scaler_path), 'metrics': metrics}
+
+__________
+# File: src/anomaly.py
+"""
+Simple anomaly detection helpers using IsolationForest.
+Provides train and predict helpers for early-fault detection.
+"""
+from pathlib import Path
+import joblib
+import json
+import numpy as np
+import pandas as pd
+
+from sklearn.ensemble import IsolationForest
+
+from .core_trainers import train_anomaly_model
+
+
+def train_anomaly(input_path: str, outdir: str = 'models_anomaly', contamination: float = 0.01, do_feature_engineering: bool = True):
+    # wrapper that calls core trainer
+    return train_anomaly_model(input_path, outdir=outdir, contamination=contamination, feature_engineering=do_feature_engineering)
+
+__________
+# File: src/auto_train.py
+"""
+Unified auto-train CLI. Usage:
+  python -m src.auto_train --task anomaly --file data/raw/ai4i2020.csv --outdir models_auto
+
+Tasks: anomaly | classify | regression
+"""
+import argparse
+from pathlib import Path
+import json
+
+from .core_trainers import train_anomaly_model, train_classification, train_regression, train_rul_model
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--task', required=True, choices=['anomaly', 'classify', 'regression'])
+    parser.add_argument('--file', required=True)
+    parser.add_argument('--target', required=False)
+    parser.add_argument('--outdir', default='models_auto')
+    parser.add_argument('--n-estimators', type=int, default=50)
+    parser.add_argument('--n-jobs', type=int, default=1)
+    parser.add_argument('--no-feature-engineering', action='store_true')
+    args = parser.parse_args()
+
+    if args.task == 'anomaly':
+        res = train_anomaly_model(args.file, outdir=args.outdir, feature_engineering=not args.no_feature_engineering)
+        print('Anomaly model saved:', res)
+    elif args.task == 'classify':
+        if not args.target:
+            raise SystemExit('Classification requires --target')
+        res = train_classification(args.file, args.target, outdir=args.outdir, test_size=0.2, n_estimators=args.n_estimators, n_jobs=args.n_jobs, feature_engineering=not args.no_feature_engineering)
+        print('Classification result:', res)
+    elif args.task == 'regression':
+        if not args.target:
+            raise SystemExit('Regression requires --target')
+        res = train_regression(args.file, args.target, outdir=args.outdir, test_size=0.2, n_estimators=args.n_estimators, n_jobs=args.n_jobs, feature_engineering=not args.no_feature_engineering)
+        print('Regression result:', res)
+    elif args.task == 'rul':
+        # RUL estimation: train using id/cycle inference not implemented here; call train_rul_model separately when columns are known
+        raise SystemExit('Use the `rul` task only when you provide id/cycle columns via the train_rul CLI or call core functions programmatically')
+
+
+if __name__ == '__main__':
+    main()
+
+__________
+# File: src/batch_train.py
+"""
+Batch training helper: discover datasets in raw folders and train models for top numeric targets.
+
+Behavior / assumptions:
+- For each discovered dataset (CSV or MAT) we pick up to `max_targets` numeric columns with highest variance as targets.
+- We skip columns that look like identifiers (contain 'id', 'udi', 'product').
+- Default model: RandomForest with `n_estimators` trees and `n_jobs` parallelism.
+- Artifacts are saved under `models_batch/<dataset_stem>/`.
+
+Run as module:
+    python -m src.batch_train
+"""
+from pathlib import Path
+import os
+import json
+import traceback
+from types import SimpleNamespace
+
+from .data_loader import find_raw_files, load_any
+from .preprocess import basic_clean
+from .train import train as train_fn
+
+MAX_TARGETS = 1
+N_ESTIMATORS = 10
+N_JOBS = 1
+OUT_BASE = "models_batch"
+
+
+def is_id_col(col_name: str) -> bool:
+    s = col_name.lower()
+    return any(x in s for x in ("id", "udi", "product"))
+
+
+def select_targets(df, max_targets=MAX_TARGETS):
+    numeric = df.select_dtypes(include=["number"]).copy()
+    # drop identifier-like columns
+    numeric = numeric.loc[:, [c for c in numeric.columns if not is_id_col(c)]]
+    if numeric.shape[1] == 0:
+        return []
+    variances = numeric.var(axis=0).sort_values(ascending=False)
+    targets = [c for c in variances.index.tolist() if variances[c] > 0]
+    return targets[:max_targets]
+
+
+def ensure_outdir(path: Path):
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def main():
+    files = find_raw_files()
+    if not files:
+        print("No raw files found in data/raw or raw directories.")
+        return
+
+    summary = {}
+    for f in files:
+        try:
+            print(f"\nProcessing file: {f}")
+            df = load_any(f)
+            df_clean = basic_clean(df)
+            targets = select_targets(df_clean)
+            if not targets:
+                print("  No suitable numeric targets found, skipping.")
+                continue
+
+            out_base = Path(OUT_BASE) / f.stem
+            ensure_outdir(out_base)
+            summary[str(f)] = {}
+            for t in targets:
+                print(f"  Training target: {t}")
+                args = SimpleNamespace()
+                args.file = str(f)
+                args.target = t
+                args.outdir = str(out_base)
+                args.test_size = 0.2
+                args.n_estimators = N_ESTIMATORS
+                args.n_jobs = N_JOBS
+                args.feature_engineering = False
+                try:
+                    train_fn(args)
+                    # read meta JSON
+                    meta_name = f"{f.stem}__{t.replace(' ', '_')}__meta.json"
+                    meta_path = out_base / meta_name
+                    if meta_path.exists():
+                        with open(meta_path, 'r') as mf:
+                            meta = json.load(mf)
+                        summary[str(f)][t] = meta.get('metrics', {})
+                    else:
+                        summary[str(f)][t] = {"status": "no_meta_found"}
+                except Exception as e:
+                    print(f"    Failed training target {t}: {e}")
+                    traceback.print_exc()
+                    summary[str(f)][t] = {"status": "error", "error": str(e)}
+
+        except Exception as e:
+            print(f"Failed processing file {f}: {e}")
+            traceback.print_exc()
+
+    # write overall summary
+    out_sum = Path(OUT_BASE) / "summary.json"
+    with open(out_sum, 'w') as of:
+        json.dump(summary, of, indent=2)
+
+    print('\nBatch training complete. Summary saved to', out_sum)
+
+
+if __name__ == '__main__':
+    main()
+
+__________
+# File: src/predict.py
+"""
+Load a saved model and make predictions on a dataset or a new sample CSV.
+"""
+from pathlib import Path
+import joblib
+import pandas as pd
+
+from .data_loader import load_any
+from .preprocess import preprocess_pipeline, scale_features
+
+
+def predict(model_path: str, scaler_path: str, input_path: str, target_col: str = None):
+    model = joblib.load(model_path)
+    scaler = joblib.load(scaler_path)
+    df = load_any(input_path)
+    df_proc = preprocess_pipeline(df)
+    if target_col and target_col in df_proc.columns:
+        X = df_proc.drop(columns=[target_col])
+    else:
+        # assume model trained on a set of features; try to align columns
+        X = df_proc
+    Xs, _ = scale_features(X, scaler=scaler)
+    preds = model.predict(Xs)
+    out = pd.DataFrame({"prediction": preds})
+    return out
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--scaler", required=True)
+    parser.add_argument("--input", required=True)
+    parser.add_argument("--target", default=None)
+    parser.add_argument("--out", default="predictions.csv")
+    args = parser.parse_args()
+    outdf = predict(args.model, args.scaler, args.input, args.target)
+    outdf.to_csv(args.out, index=False)
+    print("Wrote:", args.out)
+
+__________
+# File: src/predict_classifier.py
+"""
+Load a saved classifier and scaler and make predictions on a dataset.
+"""
+from pathlib import Path
+import joblib
+import pandas as pd
+
+from .data_loader import load_any
+from .preprocess import preprocess_pipeline, scale_features
+
+
+def predict(model_path: str, scaler_path: str, input_path: str, target_col: str = None):
+    clf = joblib.load(model_path)
+    scaler = joblib.load(scaler_path)
+    df = load_any(input_path)
+    df_proc = preprocess_pipeline(df)
+    if target_col and target_col in df_proc.columns:
+        X = df_proc.drop(columns=[target_col])
+    else:
+        X = df_proc
+    Xs, _ = scale_features(X, scaler=scaler)
+    preds = clf.predict(Xs)
+    out = pd.DataFrame({"prediction": preds})
+    return out
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--model', required=True)
+    parser.add_argument('--scaler', required=True)
+    parser.add_argument('--input', required=True)
+    parser.add_argument('--target', default=None)
+    parser.add_argument('--out', default='preds_clf.csv')
+    args = parser.parse_args()
+    df = predict(args.model, args.scaler, args.input, args.target)
+    df.to_csv(args.out, index=False)
+    print('Wrote', args.out)
+
+__________
+# File: src/train.py
+"""
+Train a regressor for a selected dataset and target sensor column.
+Usage example (from repo root):
+    python -m src.train --file data/raw/ai4i2020.csv --target "Air temperature (K)"
+
+The script will:
+- load dataset
+- run preprocessing pipeline
+- split into train/test
+- train a RandomForestRegressor
+- evaluate and save model + scaler
+"""
+import argparse
+from pathlib import Path
+import joblib
+import json
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+
+from .core_trainers import train_regression
+from .data_loader import load_any, find_raw_files
+from .preprocess import preprocess_pipeline, scale_features
+
+
+def train(args):
+    # wrapper to call core trainer
+    res = train_regression(args.file, target=args.target, outdir=args.outdir, test_size=args.test_size, n_estimators=args.n_estimators, n_jobs=args.n_jobs, feature_engineering=getattr(args, 'feature_engineering', True))
+    print('Regression train result:', res)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--file", required=True, help="Path to dataset file (csv or mat) or filename located in raw folders")
+    parser.add_argument("--target", required=True, help="Target column name (exact or substring) to predict")
+    parser.add_argument("--outdir", default="models", help="Output folder to save model and artifacts")
+    parser.add_argument("--test-size", type=float, default=0.2, help="Test size fraction")
+    parser.add_argument("--n-estimators", type=int, default=100, help="Number of trees for RandomForest")
+    parser.add_argument("--n-jobs", type=int, default=1, help="n_jobs for RandomForest (-1 for all cores)")
+    parser.add_argument("--no-feature-engineering", dest='feature_engineering', action='store_false', help="Disable rolling/lag feature engineering to speed up training")
+    parser.set_defaults(feature_engineering=True)
+    args = parser.parse_args()
+    try:
+        train(args)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print("Training failed:", e)
+        raise
+
+__________
+# File: src/train_classifier.py
+"""
+Train a classifier for failure-mode detection on a chosen dataset and target label.
+Usage:
+  python -m src.train_classifier --file data/raw/ai4i2020.csv --target "Machine failure" --outdir models_clf
+
+This script reuses the preprocessing pipeline and trains a RandomForestClassifier baseline.
+"""
+import argparse
+from pathlib import Path
+import joblib
+import json
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_score, confusion_matrix
+
+from .core_trainers import train_classification
+from .data_loader import load_any, find_raw_files
+from .preprocess import preprocess_pipeline, scale_features
+
+
+def train(args):
+    res = train_classification(args.file, args.target, outdir=args.outdir, test_size=args.test_size, n_estimators=args.n_estimators, n_jobs=args.n_jobs, feature_engineering=not args.no_feature_engineering)
+    print('Classification train result:', res)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--file', required=True)
+    parser.add_argument('--target', required=True)
+    parser.add_argument('--outdir', default='models_clf')
+    parser.add_argument('--test-size', type=float, default=0.2)
+    parser.add_argument('--n-estimators', type=int, default=100)
+    parser.add_argument('--n-jobs', type=int, default=1)
+    parser.add_argument('--no-feature-engineering', action='store_true', help='Disable heavy feature engineering')
+    args = parser.parse_args()
+    train(args)
+
+__________
+# File: src/train_rul.py
+"""
+Train a simple RUL estimator by inferring RUL from unit id and cycle columns.
+The script will try to find identifier and cycle-like columns automatically; you can pass names explicitly.
+
+Usage:
+  python -m src.train_rul --file data/raw/some.csv --id-col Unit --cycle-col cycle --outdir models_rul
+"""
+import argparse
+from pathlib import Path
+import joblib
+import json
+
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error, mean_absolute_error
+
+from .core_trainers import train_rul_model
+from .data_loader import load_any, find_raw_files
+from .preprocess import preprocess_pipeline, scale_features
+
+
+def infer_columns(df: pd.DataFrame):
+    cols = df.columns.tolist()
+    lower = [c.lower() for c in cols]
+    id_candidates = [cols[i] for i, c in enumerate(lower) if any(x in c for x in ('id', 'unit', 'udi', 'serial', 'asset'))]
+    cycle_candidates = [cols[i] for i, c in enumerate(lower) if any(x in c for x in ('cycle', 'time', 'op_cycle', 'timestamp'))]
+    id_col = id_candidates[0] if id_candidates else None
+    cycle_col = cycle_candidates[0] if cycle_candidates else None
+    return id_col, cycle_col
+
+
+def build_rul(df: pd.DataFrame, id_col: str, cycle_col: str):
+    # compute RUL per-row: for each unit id, RUL = max(cycle) - cycle
+    df = df.copy()
+    df['_rul_unit_max'] = df.groupby(id_col)[cycle_col].transform('max')
+    df['RUL'] = df['_rul_unit_max'] - df[cycle_col]
+    return df
+
+
+def train_rul(file: str, outdir: str = 'models_rul', id_col: str = None, cycle_col: str = None, n_estimators: int = 10, n_jobs: int = 1, no_feature_engineering: bool = True):
+    # wrapper that calls core trainer
+    return train_rul_model(file, id_col=id_col, cycle_col=cycle_col, outdir=outdir, n_estimators=n_estimators, n_jobs=n_jobs, feature_engineering=not no_feature_engineering)
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--file', required=True)
+    parser.add_argument('--outdir', default='models_rul')
+    parser.add_argument('--id-col', default=None)
+    parser.add_argument('--cycle-col', default=None)
+    parser.add_argument('--n-estimators', type=int, default=10)
+    parser.add_argument('--n-jobs', type=int, default=1)
+    parser.add_argument('--no-feature-engineering', action='store_true')
+    args = parser.parse_args()
+    res = train_rul(args.file, outdir=args.outdir, id_col=args.id_col, cycle_col=args.cycle_col, n_estimators=args.n_estimators, n_jobs=args.n_jobs, no_feature_engineering=args.no_feature_engineering)
+    print('RUL train result:', res)
+
+__________
+# File: run_train_quick.py
+# Quick programmatic runner for the train pipeline to ensure artifacts are created and prints appear
+from types import SimpleNamespace
+from src import train
+import os
+
+args = SimpleNamespace()
+args.file = os.path.join('data','raw','ai4i2020.csv')
+args.target = 'Air temperature'
+args.outdir = 'models_quick'
+args.test_size = 0.2
+args.n_estimators = 10
+args.n_jobs = 1
+
+if __name__ == '__main__':
+    print('Starting programmatic train runner...')
+    train.train(args)
+    print('\nContents of outdir:')
+    for root, dirs, files in os.walk(args.outdir):
+        for f in files:
+            print(os.path.join(root, f))
+    print('Done')
+
+__________
+# File: app/streamlit_dashboard.py
+import streamlit as st
+from pathlib import Path
+import joblib
+import json
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+import sys
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.data_loader import load_any
+from src.preprocess import preprocess_pipeline, scale_features
+
+
+MODELS_DIR = Path('models_auto_run')
+
+
+def find_models_for_dataset(stem: str):
+    # look under models_auto_run/* for entries matching stem
+    res = {'anomaly': None, 'classifier': None, 'rul': None}
+    base = MODELS_DIR
+    if not base.exists():
+        return res
+    for dsdir in base.iterdir():
+        if dsdir.is_dir() and dsdir.name == stem:
+            # anomaly
+            an = dsdir / 'anomaly'
+            if an.exists():
+                meta = list(an.glob(f"{stem}*__meta.json"))
+                if meta:
+                    with open(meta[0], 'r') as f:
+                        j = json.load(f)
+                    # determine model path: prefer meta model_path, otherwise look for a joblib in the folder
+                    model_path = None
+                    if j.get('model_path'):
+                        candidate = Path(j['model_path'])
+                        if candidate.exists():
+                            model_path = candidate
+                        else:
+                            # assume model is stored in the same folder
+                            model_path = an / Path(j['model_path']).name
+                    else:
+                        candidates = list(an.glob(f"{stem}*isof*.joblib")) + list(an.glob(f"{stem}*__isof.joblib")) + list(an.glob("*.joblib"))
+                        model_path = candidates[0] if candidates else None
+                    scaler_path = None
+                    if j.get('scaler_path'):
+                        candidate = Path(j['scaler_path'])
+                        if candidate.exists():
+                            scaler_path = candidate
+                        else:
+                            scaler_path = an / Path(j['scaler_path']).name
+                    res['anomaly'] = {'meta': j, 'model': str(model_path) if model_path is not None else None, 'scaler': str(scaler_path) if scaler_path is not None else None}
+            clf = dsdir / 'classifier'
+            if clf.exists():
+                meta = list(clf.glob(f"{stem}*__meta.json"))
+                if meta:
+                    with open(meta[0], 'r') as f:
+                        j = json.load(f)
+                    # build proper paths
+                    model_p = Path(j.get('model_path', ''))
+                    scaler_p = Path(j.get('scaler_path', ''))
+                    if not model_p.exists():
+                        model_p = clf / model_p.name
+                    if not scaler_p.exists():
+                        scaler_p = clf / scaler_p.name
+                    res['classifier'] = {'meta': j, 'model': str(model_p) if model_p.exists() else None, 'scaler': str(scaler_p) if scaler_p.exists() else None}
+            rul = dsdir / 'rul'
+            if rul.exists():
+                meta = list(rul.glob(f"{stem}*__RUL__meta.json"))
+                if meta:
+                    with open(meta[0], 'r') as f:
+                        j = json.load(f)
+                    model_p = Path(j.get('model_path', ''))
+                    scaler_p = Path(j.get('scaler_path', ''))
+                    if not model_p.exists():
+                        model_p = rul / model_p.name
+                    if not scaler_p.exists():
+                        scaler_p = rul / scaler_p.name
+                    res['rul'] = {'meta': j, 'model': str(model_p) if model_p.exists() else None, 'scaler': str(scaler_p) if scaler_p.exists() else None}
+    return res
+
+
+def run_anomaly_inference(model_path, scaler_path, df):
+    iso = joblib.load(model_path)
+    scaler = joblib.load(scaler_path)
+    proc = preprocess_pipeline(df, do_feature_engineering=False)
+    X = proc.select_dtypes(include=[np.number]).fillna(0)
+    Xs, _ = scale_features(X, scaler=scaler)
+    scores = iso.decision_function(Xs)
+    preds = iso.predict(Xs)
+    return preds, scores
+
+
+def run_classifier_inference(model_path, scaler_path, df, target_col=None):
+    clf = joblib.load(model_path)
+    scaler = joblib.load(scaler_path)
+    proc = preprocess_pipeline(df, do_feature_engineering=False)
+    if target_col and target_col in proc.columns:
+        X = proc.drop(columns=[target_col])
+    else:
+        X = proc.select_dtypes(include=[np.number]).fillna(0)
+    Xs, _ = scale_features(X, scaler=scaler)
+    preds = clf.predict(Xs)
+    probs = None
+    try:
+        probs = clf.predict_proba(Xs)
+    except Exception:
+        pass
+    return preds, probs
+
+
+def run_rul_inference(model_path, scaler_path, df, id_col=None, cycle_col=None):
+    model = joblib.load(model_path)
+    scaler = joblib.load(scaler_path) if scaler_path else None
+
+    # Attempt to recreate the same columns used at training: training used a column
+    # named '_rul_unit_max' computed per unit as the max cycle. If the uploaded
+    # dataframe contains id/cycle columns (commonly 'unit' and 'cycle'), compute it.
+    df2 = df.copy()
+    if id_col is None or cycle_col is None:
+        # try common names
+        if 'unit' in df2.columns and 'cycle' in df2.columns:
+            id_col = 'unit'
+            cycle_col = 'cycle'
+
+    if id_col and cycle_col and id_col in df2.columns and cycle_col in df2.columns:
+        try:
+            df2['_rul_unit_max'] = df2.groupby(id_col)[cycle_col].transform('max')
+        except Exception:
+            pass
+        proc = preprocess_pipeline(df2.drop(columns=[id_col, cycle_col]), do_feature_engineering=False)
+    else:
+        # no id/cycle info; try to run preprocess as-is but warn about missing fields
+        proc = preprocess_pipeline(df2, do_feature_engineering=False)
+
+    # ensure numeric features only and align to training scaler
+    X = proc.select_dtypes(include=[np.number]).fillna(0)
+    Xs, _ = scale_features(X, scaler=scaler)
+    preds = model.predict(Xs)
+    return preds
+
+
+def summary_status(anom_preds, clf_preds, rul_preds):
+    # simple heuristic:
+    # - if anomaly rate > 5% -> Critical
+    # - if classifier majority says failure -> Needs maintenance
+    # - if median RUL < 20 -> Needs maintenance (critical if <5)
+    if anom_preds is not None:
+        anom_rate = (anom_preds == -1).mean()
+    else:
+        anom_rate = 0.0
+    if clf_preds is not None and len(clf_preds) > 0:
+        fail_rate = (clf_preds != 0).mean()
+    else:
+        fail_rate = 0.0
+    if rul_preds is not None and len(rul_preds) > 0:
+        median_rul = float(np.median(rul_preds))
+    else:
+        median_rul = None
+
+    if anom_rate > 0.05:
+        return 'CRITICAL', f'Anomaly rate {anom_rate:.1%} > 5%'
+    if median_rul is not None and median_rul < 5:
+        return 'CRITICAL', f'Median RUL {median_rul:.1f} < 5'
+    if fail_rate > 0.2:
+        return 'NEEDS MAINTENANCE', f'Classifier failure rate {fail_rate:.1%} > 20%'
+    if median_rul is not None and median_rul < 20:
+        return 'NEEDS MAINTENANCE', f'Median RUL {median_rul:.1f} < 20'
+    return 'OK', 'No immediate issue detected'
+
+
+def main():
+    st.set_page_config(page_title='Equipment Health Dashboard', layout='wide')
+    st.title('Equipment Health Dashboard')
+
+    uploaded = st.file_uploader('Upload a CSV / MAT / TXT dataset', type=['csv', 'mat', 'txt', 'dat'])
+    sample_selector = st.selectbox('Or choose a preloaded dataset', options=['--none--'] + [p.name for p in Path('data/raw').iterdir() if p.is_file()])
+
+    df = None
+    if uploaded is not None:
+        # save temp file
+        tmp = Path('tmp_upload')
+        tmp.mkdir(exist_ok=True)
+        fp = tmp / uploaded.name
+        with open(fp, 'wb') as f:
+            f.write(uploaded.getbuffer())
+        df = load_any(fp)
+        stem = fp.stem
+    elif sample_selector and sample_selector != '--none--':
+        df = load_any(Path('data/raw') / sample_selector)
+        stem = Path(sample_selector).stem
+    else:
+        st.info('Upload a dataset or choose a sample to begin')
+        return
+
+    st.subheader('Preview')
+    st.dataframe(df.head(200))
+
+    st.subheader('Summary')
+    st.write(df.describe(include='all'))
+
+    # quick plots
+    st.subheader('Quick plots')
+    numcols = df.select_dtypes(include=[np.number]).columns.tolist()
+    if numcols:
+        c1, c2 = st.columns(2)
+        with c1:
+            st.write('Histogram (first numeric)')
+            fig, ax = plt.subplots()
+            df[numcols[0]].hist(bins=30, ax=ax)
+            st.pyplot(fig)
+        with c2:
+            st.write('Time-series (first 3 numeric columns)')
+            fig2, ax2 = plt.subplots()
+            for c in numcols[:3]:
+                ax2.plot(df[c].values, label=c)
+            ax2.legend()
+            st.pyplot(fig2)
+
+    # find models
+    models = find_models_for_dataset(stem)
+    st.subheader('Available models')
+    st.json({k: bool(v) for k, v in models.items()})
+
+    anom_preds = None
+    clf_preds = None
+    rul_preds = None
+
+    if models['anomaly'] and models['anomaly'].get('model'):
+        st.write('Running anomaly model...')
+        meta = models['anomaly']['meta']
+        model_path_raw = models['anomaly'].get('model')
+        if model_path_raw is None:
+            st.error('Anomaly model not found on disk')
+        else:
+            model_path = Path(model_path_raw)
+            if not model_path.exists():
+                st.error(f'Anomaly model path not found: {model_path}')
+            else:
+                scaler_path = models['anomaly'].get('scaler') or meta.get('scaler_path')
+                scaler_path = Path(scaler_path) if scaler_path else None
+                # best-effort: try to locate scaler next to model
+                if scaler_path is None or (isinstance(scaler_path, Path) and not scaler_path.exists()):
+                    candidate = model_path.parent / model_path.name.replace('.joblib', '__scaler.joblib')
+                    scaler_path = candidate if candidate.exists() else None
+                try:
+                    anom_preds, anom_scores = run_anomaly_inference(model_path, scaler_path, df)
+                    st.success('Anomaly inference done')
+                    st.write('Anomaly rate:', float((anom_preds == -1).mean()))
+                except Exception as e:
+                    st.error(f'Anomaly inference failed: {e}')
+
+    if models['classifier'] and models['classifier'].get('model'):
+        st.write('Running classifier model...')
+        meta = models['classifier']['meta']
+        model_path_raw = models['classifier'].get('model')
+        scaler_path_raw = models['classifier'].get('scaler')
+        if model_path_raw is None:
+            st.error('Classifier model not found on disk')
+        else:
+            model_path = Path(model_path_raw)
+            scaler_path = Path(scaler_path_raw) if scaler_path_raw else None
+            if not model_path.exists():
+                st.error(f'Classifier model path not found: {model_path}')
+            else:
+                try:
+                    clf_preds, probs = run_classifier_inference(model_path, scaler_path, df, target_col=meta.get('target'))
+                    st.success('Classifier inference done')
+                    st.write('Classifier majority prediction:', pd.Series(clf_preds).mode().iloc[0])
+                except Exception as e:
+                    st.error(f'Classifier inference failed: {e}')
+
+    if models['rul'] and models['rul'].get('model'):
+        st.write('Running RUL model...')
+        meta = models['rul']['meta']
+        model_path_raw = models['rul'].get('model')
+        scaler_path_raw = models['rul'].get('scaler')
+        if model_path_raw is None:
+            st.error('RUL model not found on disk')
+        else:
+            model_path = Path(model_path_raw)
+            scaler_path = Path(scaler_path_raw) if scaler_path_raw else None
+            if not model_path.exists():
+                st.error(f'RUL model path not found: {model_path}')
+            else:
+                try:
+                    # pass potential id/cycle names from meta if available
+                    idc = meta.get('id_col')
+                    cyc = meta.get('cycle_col')
+                    rul_preds = run_rul_inference(model_path, scaler_path, df, id_col=idc, cycle_col=cyc)
+                    st.success('RUL inference done')
+                    st.write('RUL median:', float(np.median(rul_preds)))
+                except Exception as e:
+                    st.error(f'RUL inference failed: {e}')
+
+    status, reason = summary_status(anom_preds, clf_preds, rul_preds)
+    st.subheader('Equipment status')
+    if status == 'CRITICAL':
+        st.error(f'CRITICAL  {reason}')
+    elif status == 'NEEDS MAINTENANCE':
+        st.warning(f'NEEDS MAINTENANCE  {reason}')
+    else:
+        st.success(f'OK  {reason}')
+
+
+if __name__ == '__main__':
+    main()
+
+__________
+# File: scripts/generate_sample_maintenance.py
+"""Generate a synthetic predictive-maintenance dataset and save to data/sample_maintenance.csv
+
+Columns produced:
+- unit: engine/machine id
+- cycle: time-step or cycle counter
+- op_setting_1..3: operational settings
+- s1..s8: sensor readings (vibration, temp, pressure, etc.)
+- failure_flag: binary (0/1) indicating failure occurs at or after a cycle
+- failure_mode: categorical failure mode ("none", "bearing", "wear", "electrical")
+- RUL: Remaining Useful Life (max_cycle - cycle)
+
+Run: python scripts/generate_sample_maintenance.py
+"""
+import random
+from pathlib import Path
+import pandas as pd
+import numpy as np
+
+OUT = Path('data') / 'sample_maintenance.csv'
+OUT.parent.mkdir(parents=True, exist_ok=True)
+
+random.seed(42)
+np.random.seed(42)
+
+rows = []
+num_units = 25
+for unit in range(1, num_units + 1):
+    # each unit will have between 40 and 80 cycles
+    max_cycle = random.randint(40, 80)
+    # decide if this unit will experience a failure during these cycles
+    will_fail = random.random() < 0.6  # 60% units have a failure
+    if will_fail:
+        # failure happens in the last 10 cycles
+        fail_cycle = random.randint(max_cycle - 10, max_cycle)
+        failure_mode = random.choice(['bearing', 'wear', 'electrical'])
+    else:
+        fail_cycle = None
+        failure_mode = 'none'
+
+    # baseline operational settings per unit
+    op1 = round(random.uniform(0.5, 1.5), 3)
+    op2 = round(random.uniform(0.0, 1.0), 3)
+    op3 = round(random.uniform(100.0, 300.0), 2)
+
+    for cycle in range(1, max_cycle + 1):
+        # simulate sensors
+        # s1: vibration - slowly increasing; sharp rise near failure
+        base_vib = 0.5 + 0.01 * cycle + np.random.normal(0, 0.02)
+        if will_fail and cycle >= (fail_cycle - 8):
+            base_vib += 0.05 * (cycle - (fail_cycle - 8))
+        s1 = round(max(0, base_vib), 4)
+
+        # s2: temperature - slight trend up
+        base_temp = 60 + 0.02 * cycle + np.random.normal(0, 0.5)
+        if will_fail and cycle >= (fail_cycle - 5):
+            base_temp += 0.5 * (cycle - (fail_cycle - 5))
+        s2 = round(base_temp, 3)
+
+        # s3: pressure - some noise
+        s3 = round(30 + np.sin(cycle / 5.0) * 2 + np.random.normal(0, 0.3), 3)
+
+        # s4: acoustic level - rises closer to failure
+        s4 = round(40 + 0.1 * cycle + (2 if will_fail and cycle >= (fail_cycle - 6) else 0) + np.random.normal(0, 0.5), 3)
+
+        # s5..s8: additional sensors random-ish
+        s5 = round(100 + np.random.normal(0, 1), 3)
+        s6 = round(0.01 * cycle + np.random.normal(0, 0.01), 4)
+        s7 = round(500 + np.random.normal(0, 5), 3)
+        s8 = round(np.random.uniform(0, 1), 3)
+
+        failure_flag = 0
+        fmode = 'none'
+        if will_fail and cycle >= fail_cycle:
+            failure_flag = 1
+            fmode = failure_mode
+        else:
+            fmode = 'none'
+
+        rows.append({
+            'unit': unit,
+            'cycle': cycle,
+            'op_setting_1': op1,
+            'op_setting_2': op2,
+            'op_setting_3': op3,
+            's1_vibration': s1,
+            's2_temp': s2,
+            's3_pressure': s3,
+            's4_acoustic': s4,
+            's5_flow': s5,
+            's6_current': s6,
+            's7_voltage': s7,
+            's8_misc': s8,
+            'failure_flag': failure_flag,
+            'failure_mode': fmode,
+            'RUL': max_cycle - cycle
+        })
+
+# create DataFrame and save
+pdf = pd.DataFrame(rows)
+pdf.to_csv(OUT, index=False)
+print(f'Wrote sample dataset to: {OUT}  rows={len(pdf)}')
+
+__________
+# File: scripts/train_sample_models.py
+"""Train quick baseline models (anomaly, classifier, RUL) on data/raw/sample_maintenance.csv
+Saves artifacts under models_auto_run/sample_maintenance/{anomaly,classifier,rul}
+"""
+import sys
+from pathlib import Path
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.core_trainers import train_anomaly_model, train_classification, train_rul_model
+
+
+if __name__ == '__main__':
+    f = 'data/raw/sample_maintenance.csv'
+    print('Training anomaly...')
+    res_an = train_anomaly_model(f, outdir='models_auto_run/sample_maintenance/anomaly', contamination=0.02, feature_engineering=False)
+    print('Anomaly done:', res_an)
+
+    print('Training classifier (failure_flag)...')
+    res_clf = train_classification(f, target='failure_flag', outdir='models_auto_run/sample_maintenance/classifier', n_estimators=16, n_jobs=1, feature_engineering=False)
+    print('Classifier done:', res_clf)
+
+    print('Training RUL...')
+    res_rul = train_rul_model(f, id_col='unit', cycle_col='cycle', outdir='models_auto_run/sample_maintenance/rul', n_estimators=16, n_jobs=1, feature_engineering=False)
+    print('RUL done:', res_rul)
+
+__________
+# File: scripts/test_anomaly_run.py
+from src.anomaly import train_anomaly
+
+if __name__ == '__main__':
+    print('Starting anomaly train test...')
+    res = train_anomaly('data/raw/ai4i2020.csv', outdir='models_test_anom', do_feature_engineering=False)
+    print('Result:', res)
+
+__________
+# File: scripts/run_all_tasks.py
+"""
+Orchestrator to run anomaly detection, classification (if label present), and RUL (if id/cycle present)
+on all discovered datasets in data/raw and raw. Uses conservative defaults to avoid long runs.
+
+It will create per-dataset subfolders under models_auto_run/ with artifacts and a summary JSON.
+"""
+from pathlib import Path
+import json
+import sys
+from pathlib import Path as _Path
+
+# Ensure repository root is on sys.path when running this script directly
+REPO_ROOT = _Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.data_loader import find_raw_files, load_any
+from src.preprocess import basic_clean
+from src.anomaly import train_anomaly
+from src.train_classifier import train as train_clf
+from src.train_rul import train_rul
+
+OUT_BASE = Path('models_auto_run')
+OUT_BASE.mkdir(exist_ok=True)
+
+
+def is_failure_col(col):
+    s = col.lower()
+    return 'failure' in s or 'fault' in s or 'fault_mode' in s or 'mode' in s
+
+
+def infer_id_cycle(df):
+    cols = df.columns.tolist()
+    lower = [c.lower() for c in cols]
+    id_col = None
+    cycle_col = None
+    for i, c in enumerate(lower):
+        if any(x in c for x in ('id', 'unit', 'asset', 'serial', 'machine')) and id_col is None:
+            id_col = cols[i]
+        if any(x in c for x in ('cycle', 'time', 'op_cycle', 'timestamp', 'cycle_no')) and cycle_col is None:
+            cycle_col = cols[i]
+    return id_col, cycle_col
+
+
+def main():
+    files = find_raw_files()
+    summary = {}
+    for f in files:
+        print(f"\nProcessing {f}")
+        summary[str(f)] = {}
+        try:
+            df = load_any(f)
+            # run anomaly (fast)
+            print('  Running anomaly detection...')
+            anom_outdir = OUT_BASE / f.stem / 'anomaly'
+            anom_outdir.mkdir(parents=True, exist_ok=True)
+            try:
+                res_anom = train_anomaly(str(f), outdir=str(anom_outdir), do_feature_engineering=False)
+                summary[str(f)]['anomaly'] = res_anom
+            except Exception as e:
+                summary[str(f)]['anomaly'] = {'error': str(e)}
+
+            # classification if failure-like column exists
+            fail_cols = [c for c in df.columns if is_failure_col(c)]
+            if fail_cols:
+                t = fail_cols[0]
+                print(f'  Running classifier for target {t}...')
+                clf_outdir = OUT_BASE / f.stem / 'classifier'
+                clf_outdir.mkdir(parents=True, exist_ok=True)
+                try:
+                    args = type('a', (), {})()
+                    args.file = str(f)
+                    args.target = t
+                    args.outdir = str(clf_outdir)
+                    args.test_size = 0.2
+                    args.n_estimators = 10
+                    args.n_jobs = 1
+                    args.no_feature_engineering = True
+                    train_clf(args)
+                    summary[str(f)]['classifier'] = {'target': t, 'outdir': str(clf_outdir)}
+                except Exception as e:
+                    summary[str(f)]['classifier'] = {'error': str(e)}
+
+            # RUL if id+cycle present
+            idc, cyc = infer_id_cycle(df)
+            if idc and cyc:
+                print(f'  Running RUL training inferred id={idc}, cycle={cyc}...')
+                rul_outdir = OUT_BASE / f.stem / 'rul'
+                rul_outdir.mkdir(parents=True, exist_ok=True)
+                try:
+                    res_rul = train_rul(str(f), outdir=str(rul_outdir), id_col=idc, cycle_col=cyc, n_estimators=10, n_jobs=1, no_feature_engineering=True)
+                    summary[str(f)]['rul'] = res_rul
+                except Exception as e:
+                    summary[str(f)]['rul'] = {'error': str(e)}
+            else:
+                summary[str(f)]['rul'] = {'status': 'no_id_cycle_found'}
+
+        except Exception as e:
+            print('  Top-level error for file:', e)
+            summary[str(f)]['error'] = str(e)
+
+    # save summary
+    outp = OUT_BASE / 'summary.json'
+    with open(outp, 'w') as f:
+        json.dump(summary, f, indent=2)
+
+    print('\nDone. Summary at', outp)
+
+
+if __name__ == '__main__':
+    main()

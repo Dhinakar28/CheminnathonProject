@@ -1,0 +1,10 @@
+{
+  "file": "data\\raw\\ai4i2020.csv",
+  "target": "Tool wear [min]",
+  "metrics": {
+    "rmse": 29.83210615092404,
+    "mae": 18.972510000000003
+  },
+  "model_path": "models_auto_reg\\ai4i2020__Tool_wear_[min]__rf.joblib",
+  "scaler_path": "models_auto_reg\\ai4i2020__Tool_wear_[min]__scaler.joblib"
+}

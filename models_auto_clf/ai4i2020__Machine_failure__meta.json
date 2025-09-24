@@ -1,0 +1,10 @@
+{
+  "file": "data\\raw\\ai4i2020.csv",
+  "target": "Machine failure",
+  "metrics": {
+    "accuracy": 0.999,
+    "f1_macro": 0.9922786481457173
+  },
+  "model_path": "models_auto_clf\\ai4i2020__Machine_failure__rf_clf.joblib",
+  "scaler_path": "models_auto_clf\\ai4i2020__Machine_failure__scaler.joblib"
+}

@@ -1,0 +1,31 @@
+{
+  "file": "C:\\ChemProj3\\CheminnathonProject\\data\\raw\\train_FD001.txt",
+  "metrics": {
+    "rmse": 30.176695299204038,
+    "mae": 22.182020838381394
+  },
+  "model_path": "models_auto_run\\train_FD001\\rul\\train_FD001__RUL__rf.joblib",
+  "scaler_path": "models_auto_run\\train_FD001\\rul\\train_FD001__RUL__scaler.joblib",
+  "id_col": "unit",
+  "cycle_col": "cycle",
+  "feature_columns": [
+    "operational_setting_1",
+    "operational_setting_2",
+    "s2",
+    "s3",
+    "s4",
+    "s6",
+    "s7",
+    "s8",
+    "s9",
+    "s11",
+    "s12",
+    "s13",
+    "s14",
+    "s15",
+    "s17",
+    "s20",
+    "s21",
+    "_rul_unit_max"
+  ]
+}

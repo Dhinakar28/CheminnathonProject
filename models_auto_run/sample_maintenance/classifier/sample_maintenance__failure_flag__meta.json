@@ -1,0 +1,10 @@
+{
+  "file": "C:\\ChemProj3\\CheminnathonProject\\data\\raw\\sample_maintenance.csv",
+  "target": "failure_flag",
+  "metrics": {
+    "accuracy": 0.996742671009772,
+    "f1_macro": 0.9830133348088308
+  },
+  "model_path": "models_auto_run\\sample_maintenance\\classifier\\sample_maintenance__failure_flag__rf_clf.joblib",
+  "scaler_path": "models_auto_run\\sample_maintenance\\classifier\\sample_maintenance__failure_flag__scaler.joblib"
+}

@@ -1,0 +1,9 @@
+{
+  "file": "data\\raw\\train_FD001.txt",
+  "metrics": {
+    "rmse": 30.176695299204038,
+    "mae": 22.182020838381394
+  },
+  "model_path": "models_rul\\train_FD001__RUL__rf.joblib",
+  "scaler_path": "models_rul\\train_FD001__RUL__scaler.joblib"
+}

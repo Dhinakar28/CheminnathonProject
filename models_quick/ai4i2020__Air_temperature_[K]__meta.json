@@ -1,0 +1,11 @@
+{
+  "file": "data\\raw\\ai4i2020.csv",
+  "target": "Air temperature [K]",
+  "metrics": {
+    "rmse": 0.04559714903368395,
+    "mae": 0.0338900000000059,
+    "r2": 0.9994761743211765
+  },
+  "model_path": "models_quick\\ai4i2020__Air_temperature_[K]__rf.joblib",
+  "scaler_path": "models_quick\\ai4i2020__Air_temperature_[K]__scaler.joblib"
+}

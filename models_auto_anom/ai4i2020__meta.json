@@ -1,0 +1,6 @@
+{
+  "file": "data\\raw\\ai4i2020.csv",
+  "n_samples": 10000,
+  "n_features": 12,
+  "n_anomalies": 100
+}
