@@ -171,7 +171,7 @@ def run_inference():
     if not stem and file_path:
         try:
             stem = Path(file_path).stem
-        except Exception:
+        except Exception as e:
             stem = None
 
     models = list_models_for_stem(stem)
@@ -360,15 +360,9 @@ def signin():
     if request.method == 'POST':
         email = request.form.get('username').strip().lower()
         password = request.form.get('password')
-<<<<<<< HEAD
         users = load_users()
         if email in users and users[email]['password'] == password:
             session['user'] = email
-=======
-        # Simple hardcoded check, replace with DB/user management in production
-        if username == 'admin' and password == 'password':
-            session['user'] = username
->>>>>>> 1f567f709805c065d495d993fb1bf7c167d9d95a
             return redirect(url_for('index'))
         else:
             error = 'Invalid email or password.'
