@@ -333,7 +333,7 @@ def signin():
         username = request.form.get('username')
         password = request.form.get('password')
         # Simple hardcoded check, replace with DB/user management in production
-        if username == 'admin' and password == 'password':
+        if username == 'codebreakers' and password == 'gawk123':
             session['user'] = username
             return redirect(url_for('index'))
         else:
