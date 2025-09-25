@@ -322,22 +322,56 @@ def plot_series():
 
 
 
-# Sign-in page route
-from flask import session
-app.secret_key = 'your_secret_key_here'  # Change this to a secure key
 
+# User data file
+USERS_FILE = ROOT / 'users.json'
+
+def load_users():
+    if USERS_FILE.exists():
+        with open(USERS_FILE, 'r') as f:
+            return json.load(f)
+    return {}
+
+def save_users(users):
+    with open(USERS_FILE, 'w') as f:
+        json.dump(users, f)
+
+# Sign Up route
+@app.route('/signup', methods=['GET', 'POST'])
+def signup():
+    error = None
+    success = None
+    if request.method == 'POST':
+        email = request.form.get('email').strip().lower()
+        password = request.form.get('password')
+        users = load_users()
+        if email in users:
+            error = 'Email already registered.'
+        else:
+            users[email] = {'password': password}
+            save_users(users)
+            success = 'Registration successful! Please sign in.'
+    return render_template('signup.html', error=error, success=success)
+
+# Sign In route
 @app.route('/signin', methods=['GET', 'POST'])
 def signin():
     error = None
     if request.method == 'POST':
-        username = request.form.get('username')
+        email = request.form.get('username').strip().lower()
         password = request.form.get('password')
+<<<<<<< HEAD
+        users = load_users()
+        if email in users and users[email]['password'] == password:
+            session['user'] = email
+=======
         # Simple hardcoded check, replace with DB/user management in production
         if username == 'codebreakers' and password == 'gawk123':
             session['user'] = username
+>>>>>>> 1f567f709805c065d495d993fb1bf7c167d9d95a
             return redirect(url_for('index'))
         else:
-            error = 'Invalid username or password.'
+            error = 'Invalid email or password.'
     return render_template('signin.html', error=error)
 
 if __name__ == '__main__':
