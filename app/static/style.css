@@ -86,3 +86,7 @@ body.dark .small-muted { color: var(--muted); }
 	border-radius:0.375rem;
 	font-size:0.9rem;
 }
+
+/* Ensure modals and backdrops are above all content (debug safety net) */
+.modal, .modal-backdrop { z-index: 2000 !important; }
+.modal-backdrop { background: rgba(0,0,0,0.5) !important; }

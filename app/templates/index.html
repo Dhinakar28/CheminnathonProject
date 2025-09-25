@@ -45,7 +45,7 @@
         {% if summary %}
           <p>Rows: {{ summary.n_rows }} — Numeric features: {{ summary.n_numeric }}</p>
           <p>Numeric columns (sample): {{ summary.numeric_cols | join(', ') }}</p>
-          <button id="runBtn" class="btn btn-success">Run Inference</button>
+          <button id="runBtn" type="button" class="btn btn-success">Run Inference</button>
         {% else %}
           <p class="text-muted">Upload a dataset or select a sample to see a summary.</p>
         {% endif %}
@@ -60,7 +60,7 @@
           <div class="card-body">
             <div class="d-flex justify-content-between align-items-center">
               <div class="small-muted">Anomaly Rate</div>
-              <div><button id="anomDrillBtn" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#anomModal">Details</button></div>
+              <div><button id="anomDrillBtn" type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#anomModal">Details</button></div>
             </div>
             <div id="tileAnom" class="metric">-</div>
             <div class="small-muted">% of rows flagged as anomalous</div>
@@ -73,8 +73,8 @@
             <div class="d-flex justify-content-between align-items-center">
               <div class="small-muted">Top Predicted Failure Mode</div>
               <div>
-                <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#clfModal" title="Details">Details</button>
-                <button class="btn btn-sm btn-outline-secondary ms-1" data-bs-toggle="modal" data-bs-target="#helpModal" title="What does this mean?">?
+                <button type="button" class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#clfModal" title="Details">Details</button>
+                <button type="button" class="btn btn-sm btn-outline-secondary ms-1" data-bs-toggle="modal" data-bs-target="#helpModal" title="What does this mean?">?
                 </button>
               </div>
             </div>
@@ -86,7 +86,7 @@
       <div class="col-md-4">
         <div class="card summary-tile">
           <div class="card-body">
-            <div class="d-flex justify-content-between align-items-center"><div class="small-muted">Median RUL</div><div><button id="rulDrillBtn" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#rulModal">Details</button></div></div>
+            <div class="d-flex justify-content-between align-items-center"><div class="small-muted">Median RUL</div><div><button id="rulDrillBtn" type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#rulModal">Details</button></div></div>
             <div id="tileRUL" class="metric">-</div>
             <div class="small-muted">Cycles until expected failure (median)</div>
           </div>
@@ -102,9 +102,9 @@
             <span id="maintenanceBadge" class="maint-badge bg-secondary text-white ms-3" style="margin-left:12px">UNKNOWN</span>
           </div>
           <div>
-            <button class="btn btn-sm btn-outline-primary me-2" data-bs-toggle="modal" data-bs-target="#maintModal">View</button>
-            <button class="btn btn-sm btn-outline-secondary me-2" onclick="try{window.showModal('visualsModal')}catch(e){console.warn(e)}">Visuals</button>
-            <button class="btn btn-sm btn-outline-secondary" onclick="try{window.showModal('summaryModal')}catch(e){console.warn(e)}">Summaries</button>
+            <button type="button" class="btn btn-sm btn-outline-primary me-2" data-bs-toggle="modal" data-bs-target="#maintModal">View</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary me-2" onclick="try{window.showModal('visualsModal')}catch(e){console.warn(e)}">Visuals</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="try{window.showModal('summaryModal')}catch(e){console.warn(e)}">Summaries</button>
           </div>
         </div>
         <div id="reportArea"></div>

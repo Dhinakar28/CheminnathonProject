@@ -41,6 +41,9 @@ document.addEventListener('DOMContentLoaded', () => {
 	} catch(e) { console.warn('theme init failed', e); }
 });
 
+// ensure any leftover modal artifacts are cleared on load (helps recover from previous stuck state)
+document.addEventListener('DOMContentLoaded', () => { try { cleanupModals(); } catch(e) {} });
+
 function setGlobalStatus(text, level) {
 	const el = document.getElementById('globalStatus');
 	if (!el) return;
@@ -59,12 +62,126 @@ window.lastInferenceFilePath = null;
 // helper to programmatically show a Bootstrap modal by id
 window.showModal = function(modalId) {
 	try {
+		// ensure a clean state before attempting to show a modal
+		try { cleanupModals(); } catch(e) {}
 		const el = document.getElementById(modalId);
 		if (!el) { console.warn('showModal: modal not found', modalId); return; }
-		const inst = bootstrap.Modal.getOrCreateInstance(el);
-		inst.show();
+		console.debug('showModal: attempting bootstrap API for', modalId);
+		// prefer bootstrap API if available
+		if (window.bootstrap && bootstrap.Modal && typeof bootstrap.Modal.getOrCreateInstance === 'function') {
+			try {
+					// ensure modal is a direct child of body to avoid container overflow issues
+					try { if (el.parentNode !== document.body) document.body.appendChild(el); } catch(e) {}
+					// force high z-index so it sits above most content
+					try { el.style.zIndex = 3000; el.style.position = 'fixed'; } catch(e) {}
+					const inst = bootstrap.Modal.getOrCreateInstance(el);
+					inst.show();
+				return;
+			} catch (e) { console.warn('bootstrap Modal.show failed, falling back', e); }
+		}
+
+		// fallback: try dispatching a click on any button that targets this modal
+		try {
+			const btn = document.querySelector(`[data-bs-target="#${modalId}"]`);
+			if (btn) { btn.click(); return; }
+		} catch(e) { console.warn('fallback click failed', e); }
+
+			// final fallback: manually show modal and backdrop (minimal)
+			try {
+					el.style.display = 'block';
+					el.classList.add('show');
+					el.setAttribute('aria-modal','true');
+					el.removeAttribute('aria-hidden');
+					// remove existing backdrops (avoid duplicate blocking overlays)
+					try { document.querySelectorAll('.modal-backdrop').forEach(b=>b.remove()); } catch(e) {}
+					// create backdrop
+					let bd = document.createElement('div');
+					bd.className = 'modal-backdrop fade show';
+					bd.style.zIndex = 1500;
+					document.body.appendChild(bd);
+					// allow clicking the manual backdrop to cleanup
+					try { bd.addEventListener('click', () => { try { cleanupModals(); } catch(e){} }); } catch(e) {}
+					// save scroll position and lock body (manual fallback needs to emulate bootstrap behavior)
+					try {
+						window._savedScrollY = window.scrollY || window.pageYOffset || 0;
+						document.body.style.top = `-${window._savedScrollY}px`;
+						document.body.style.position = 'fixed';
+					} catch(e) { console.warn('saving scroll position failed', e); }
+					document.body.classList.add('modal-open');
+						// diagnostic banner so user sees that a modal was attempted to be shown
+						try {
+							const dbg = document.createElement('div');
+							dbg.id = 'modal-debug-banner';
+							dbg.style.position = 'fixed'; dbg.style.right = '12px'; dbg.style.top = '12px'; dbg.style.zIndex = 4000;
+							dbg.style.background = 'rgba(0,0,0,0.8)'; dbg.style.color = '#fff'; dbg.style.padding = '8px 12px'; dbg.style.borderRadius = '6px';
+							dbg.style.fontSize = '13px';
+							const hasBd = !!document.querySelector('.modal-backdrop');
+							dbg.innerText = `modal ${modalId} shown (fallback). backdrop:${hasBd}`;
+							dbg.addEventListener('click', ()=>{ try{ dbg.remove(); }catch(e){} });
+							document.body.appendChild(dbg);
+							setTimeout(()=>{ try{ dbg.remove(); }catch(e){} }, 5000);
+						} catch(e) {}
+				console.debug('showModal: manual fallback shown for', modalId);
+				return;
+			} catch(e) { console.warn('manual modal fallback failed', e); }
+
 	} catch (e) { console.warn('showModal failed', modalId, e); }
 };
+
+// debug: log when modals are shown/hidden to help diagnosing stuck backdrop
+document.addEventListener('DOMContentLoaded', () => {
+	try {
+		document.querySelectorAll('.modal').forEach(m => {
+			m.addEventListener('show.bs.modal', () => console.debug('modal show.bs.modal', m.id));
+			m.addEventListener('shown.bs.modal', () => console.debug('modal shown.bs.modal', m.id));
+			m.addEventListener('hidden.bs.modal', () => console.debug('modal hidden.bs.modal', m.id));
+		});
+	} catch(e) { console.warn('modal debug events wiring failed', e); }
+});
+
+// global cleanup: ensure no stuck backdrops or modal-open class
+document.addEventListener('hidden.bs.modal', (ev) => {
+	try {
+		console.debug('global hidden.bs.modal for', ev && ev.target && ev.target.id);
+		// small delay to let bootstrap finish its own cleanup, then ensure everything is removed
+		setTimeout(() => {
+			try { cleanupModals(); } catch(e) { console.warn('hidden.bs.modal cleanup failed', e); }
+		}, 60);
+	} catch(e) { console.warn('global hidden handler failed', e); }
+});
+
+// centralized cleanup to restore scrolling and remove any leftover backdrop/modal styles
+function cleanupModals() {
+	try {
+		// remove modal-open class from body and html just in case
+		try { document.body.classList.remove('modal-open'); } catch(e) {}
+		try { document.documentElement.classList.remove('modal-open'); } catch(e) {}
+		// remove any Bootstrap modal-backdrop elements
+		try { document.querySelectorAll('.modal-backdrop').forEach(b=>b.remove()); } catch(e) {}
+		// hide any modals with .show left over
+		try { document.querySelectorAll('.modal.show').forEach(m => {
+			try { m.classList.remove('show'); m.style.display='none'; m.setAttribute('aria-hidden','true'); } catch(e){}
+		}); } catch(e) {}
+		// clear any inline overflow/position/height/width that blocks scrolling
+		try { document.body.style.overflow = ''; } catch(e) {}
+		try { document.documentElement.style.overflow = ''; } catch(e) {}
+		try { document.body.style.position = ''; } catch(e) {}
+		try { document.body.style.top = ''; } catch(e) {}
+		try { document.body.style.bottom = ''; } catch(e) {}
+		try { document.body.style.width = ''; } catch(e) {}
+		try { document.body.style.height = ''; } catch(e) {}
+		// restore scroll position if we saved one during manual fallback
+		try {
+			if (typeof window._savedScrollY !== 'undefined' && window._savedScrollY !== null) {
+				window.scrollTo(0, window._savedScrollY || 0);
+				try { document.body.style.position = ''; document.body.style.top = ''; } catch(e) {}
+			}
+		} catch(e) { console.warn('restoring scroll pos failed', e); }
+		try { window._savedScrollY = null; } catch(e) {}
+		// remove any debug banner if present
+		try { const dbg = document.getElementById('modal-debug-banner'); if (dbg) dbg.remove(); } catch(e) {}
+	} catch(e) { console.warn('cleanupModals failed', e); }
+}
 
 function renderAnomalyDetails(detailObj) {
 	// detailObj is expected to be an array of objects: {index, score, snapshot: {col:val...}, top_features: [{feature, z_score}]}
@@ -309,7 +426,7 @@ function onUploadLoaded(summary, file_path, stem) {
 		if (main) main.classList.remove('d-none');
 		// display uploaded summary in uploadSummaryArea
 		const area = document.getElementById('uploadSummaryArea');
-		if (area && summary) area.innerHTML = `<p>Rows: ${summary.n_rows} — Numeric: ${summary.n_numeric}</p><p>Cols: ${summary.numeric_cols ? summary.numeric_cols.slice(0,10).join(', ') : ''}</p><button id="runBtn" class="btn btn-success">Run Inference</button>`;
+	if (area && summary) area.innerHTML = `<p>Rows: ${summary.n_rows} — Numeric: ${summary.n_numeric}</p><p>Cols: ${summary.numeric_cols ? summary.numeric_cols.slice(0,10).join(', ') : ''}</p><button id="runBtn" type="button" class="btn btn-success">Run Inference</button>`;
 		// rebind runBtn (since we replaced it)
 		const runBtn = document.getElementById('runBtn');
 		if (runBtn) runBtn.addEventListener('click', async () => {
@@ -483,6 +600,64 @@ document.addEventListener('DOMContentLoaded', () => {
 		});
 	} catch(e) { console.warn('visuals modal wiring failed', e); }
 });
+
+		// in-page debug overlay helper so you don't need to paste into DevTools
+		function showDebugOverlay(msg, ttl=5000) {
+			try {
+				// remove existing
+				const old = document.getElementById('inpage-debug-overlay'); if (old) old.remove();
+				const d = document.createElement('div'); d.id = 'inpage-debug-overlay';
+				d.style.position = 'fixed'; d.style.right = '12px'; d.style.bottom = '12px'; d.style.zIndex = 6000;
+				d.style.background = 'rgba(0,0,0,0.85)'; d.style.color = '#fff'; d.style.padding = '10px 14px'; d.style.borderRadius='8px'; d.style.maxWidth='420px'; d.style.fontSize='13px'; d.style.boxShadow='0 8px 20px rgba(0,0,0,0.4)';
+				d.innerText = msg;
+				d.addEventListener('click', ()=>{ try{ d.remove(); }catch(e){} });
+				document.body.appendChild(d);
+				setTimeout(()=>{ try{ d.remove(); }catch(e){} }, ttl);
+			} catch(e) { console.warn('showDebugOverlay failed', e); }
+		}
+
+		// Attach lightweight click debugers to Visuals and Summaries buttons
+		document.addEventListener('DOMContentLoaded', () => {
+				try {
+					// safe selection: select buttons by data-bs-target or by presence of onclick and then filter
+					const candidates = Array.from(document.querySelectorAll('button[data-bs-target], button[onclick]'));
+					const visBtns = candidates.filter(b => (b.getAttribute('data-bs-target') || '') === '#visualsModal' || (b.getAttribute('onclick') || '').includes("showModal('visualsModal')"));
+					const sumBtns = candidates.filter(b => (b.getAttribute('data-bs-target') || '') === '#summaryModal' || (b.getAttribute('onclick') || '').includes("showModal('summaryModal')"));
+				const bind = (btn, name, modalId) => {
+					if (!btn) return;
+					btn.addEventListener('click', (ev) => {
+						try {
+							const hasResult = !!window.lastInferenceResult;
+							const fp = window.lastInferenceFilePath || (window.lastInferenceResult && window.lastInferenceResult._file_path) || null;
+							const short = hasResult ? (typeof window.lastInferenceResult === 'object' ? (window.lastInferenceResult.overall_status || Object.keys(window.lastInferenceResult).slice(0,3).join(',')) : String(window.lastInferenceResult)) : 'NO_RESULT';
+							showDebugOverlay(`${name} clicked. hasResult:${hasResult} file_path:${fp}\nsummary:${short}`, 8000);
+							// also ensure the modal is actually opened (debug overlay shouldn't prevent opening)
+							try { if (typeof window.showModal === 'function') window.showModal(modalId); } catch(e) { console.warn('showModal call from debug handler failed', e); }
+						} catch(e) { console.warn('debug click handler failed', e); }
+					});
+				};
+				visBtns.forEach(b=>bind(b,'Visuals','visualsModal'));
+				sumBtns.forEach(b=>bind(b,'Summaries','summaryModal'));
+			} catch(e) { console.warn('attach debug click listeners failed', e); }
+		});
+  
+			// Add Escape key handler and backdrop click cleanup so users can dismiss stuck modals
+			document.addEventListener('keydown', (ev) => {
+				try {
+					if (ev.key === 'Escape') {
+						try { cleanupModals(); } catch(e) { console.warn('escape cleanup failed', e); }
+					}
+				} catch(e){ console.warn('escape cleanup failed', e); }
+			});
+
+			// allow clicking on backdrop to remove it (global delegated handler)
+			document.addEventListener('click', (ev) => {
+				try {
+					if (ev.target && ev.target.classList && ev.target.classList.contains('modal-backdrop')) {
+						try { cleanupModals(); } catch(e) { console.warn('backdrop click cleanup failed', e); }
+					}
+				} catch(e){ }
+			});
 
 	// Ensure modal buttons reliably open their modals (fallback if data-bs attributes fail or buttons are inside forms)
 	document.addEventListener('DOMContentLoaded', () => {
