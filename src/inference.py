@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from .preprocess import preprocess_pipeline, scale_features
 from .train_rul import build_rul, infer_columns
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import RobustScaler
 
 
 def _load_meta_near_model(model_path):
@@ -249,3 +251,75 @@ def generate_maintenance_report(rul_preds, anom_preds, clf_preds, failure_modes_
         report_items.append('EQUIPMENT HEALTH: OK')
 
     return report_items
+
+
+def run_noise_robust_isof(df: pd.DataFrame, contamination=0.01, n_estimators=200, max_samples='auto', smoothing=False, smooth_window=3, random_state=42):
+    """Run a local, noise-robust IsolationForest on the provided dataframe.
+
+    Returns a JSON-serializable dict with preds, scores, summary and details.
+    This function intentionally does not modify or overwrite any saved models or artifacts.
+    """
+    proc = preprocess_pipeline(df, do_feature_engineering=False)
+    X = proc.select_dtypes(include=[np.number]).fillna(0)
+
+    if X.shape[1] == 0:
+        return {'error': 'no numeric features', 'preds': None, 'scores': None, 'summary': None}
+
+    # optional median smoothing to reduce high-frequency noise
+    if smoothing and isinstance(smooth_window, int) and smooth_window > 1:
+        try:
+            X = X.rolling(window=smooth_window, min_periods=1, center=True).median()
+            X = X.fillna(method='bfill').fillna(method='ffill').fillna(0)
+        except Exception:
+            X = X.fillna(0)
+
+    scaler = RobustScaler()
+    try:
+        Xs = scaler.fit_transform(X)
+    except Exception:
+        Xs = X.values
+
+    iso = IsolationForest(n_estimators=int(n_estimators), contamination=float(contamination), max_samples=max_samples, random_state=int(random_state))
+    iso.fit(Xs)
+    scores = iso.decision_function(Xs)
+    preds = iso.predict(Xs)
+
+    preds_list = np.asarray(preds).tolist()
+    scores_list = np.asarray(scores).tolist()
+    n_samples = int(len(preds_list))
+    n_anomalies = int(sum(1 for p in preds_list if p == -1))
+    anomaly_rate = n_anomalies / max(1, n_samples)
+    summary = {'n_samples': n_samples, 'n_anomalies': n_anomalies, 'anomaly_rate': float(anomaly_rate)}
+
+    # small drill-down similar to run_anomaly_inference: top anomalous rows and top contributing features
+    anom_indexes = [i for i, p in enumerate(preds_list) if p == -1]
+    anom_details = []
+    try:
+        top_n = min(10, len(anom_indexes))
+        if top_n > 0:
+            numeric = X.select_dtypes(include=[np.number])
+            med = numeric.median()
+            std = numeric.std(ddof=0).replace(0, 1e-9)
+            for idx in anom_indexes[:top_n]:
+                row = numeric.iloc[idx]
+                z = ((row - med) / std).abs()
+                topk = z.sort_values(ascending=False).head(4).index.tolist()
+                contrib = []
+                for f in topk:
+                    val = row[f]
+                    zl = float(((row[f] - med[f]) / std[f]))
+                    contrib.append({'feature': f, 'value': float(val), 'z_score': round(zl, 2)})
+                snapshot = {c: float(numeric.iloc[idx][c]) for c in numeric.columns[:8]}
+                anom_details.append({'index': int(idx), 'snapshot': snapshot, 'top_features': contrib})
+    except Exception:
+        anom_details = []
+
+    suggestions = []
+    if anomaly_rate > 0.1:
+        suggestions.append('HIGH ANOMALY RATE — consider detailed inspection or tighter contamination.')
+    elif anomaly_rate > 0.02:
+        suggestions.append('Moderate anomaly rate — consider reviewing smoothing and contamination settings.')
+    else:
+        suggestions.append('Low anomaly rate — robust detector sees few anomalies.')
+
+    return {'preds': preds_list, 'scores': scores_list, 'summary': summary, 'details': anom_details, 'suggestions': suggestions}

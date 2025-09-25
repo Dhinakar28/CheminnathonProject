@@ -45,9 +45,18 @@
         {% if summary %}
           <p>Rows: {{ summary.n_rows }} — Numeric features: {{ summary.n_numeric }}</p>
           <p>Numeric columns (sample): {{ summary.numeric_cols | join(', ') }}</p>
-          <button id="runBtn" type="button" class="btn btn-success">Run Inference</button>
+          <div class="d-flex gap-2">
+            <button id="runBtn" type="button" class="btn btn-success">Run Inference</button>
+            <button id="reduceFalseBtn" type="button" class="btn btn-outline-success">Reduce False Alerts</button>
+          </div>
+          <div id="reduceFalseArea" class="mt-2 small text-muted">Run the local robust detector to reduce noise-driven false alerts; this will not change existing model outputs.</div>
         {% else %}
           <p class="text-muted">Upload a dataset or select a sample to see a summary.</p>
+          <div class="d-flex gap-2 mt-2">
+            <button id="runBtn" type="button" class="btn btn-success" disabled>Run Inference</button>
+            <button id="reduceFalseBtn" type="button" class="btn btn-outline-success" disabled>Reduce False Alerts</button>
+          </div>
+          <div id="reduceFalseArea" class="mt-2 small text-muted">Upload a dataset to enable the 'Reduce False Alerts' tool.</div>
         {% endif %}
         </div>
       </div>
@@ -423,6 +432,44 @@ if (runBtn) {
       window.rulChartObj = new Chart(rulCtx, {type:'bar', data:{labels:bins, datasets:[{label:'RUL counts', data:countsR, backgroundColor:'#9C27B0'}]}, options:{scales:{x:{ticks:{maxRotation:90, minRotation:30}}}}});
     } catch(e) { console.warn(e); }
 
+  });
+}
+
+// Handle Reduce False Alerts button
+const reduceBtn = document.getElementById('reduceFalseBtn');
+if (reduceBtn) {
+  reduceBtn.addEventListener('click', async () => {
+    reduceBtn.disabled = true;
+    reduceBtn.innerText = 'Reducing...';
+    let file_path = serverFilePath || (document.querySelector('select[name="sample"]') ? ('data/raw/' + document.querySelector('select[name="sample"]').value) : null);
+    if (!file_path) { alert('No uploaded file or sample selected'); reduceBtn.disabled=false; reduceBtn.innerText='Reduce False Alerts'; return; }
+    // simple param prompt UI via prompt() for now
+    const cont = parseFloat(prompt('Contamination (fraction of anomalies, e.g. 0.01)', '0.01')) || 0.01;
+    const smoothing = confirm('Apply median smoothing to reduce high-frequency noise? (OK = yes, Cancel = no)');
+    const smooth_w = smoothing ? parseInt(prompt('Smoothing window (odd integer)', '3')) || 3 : 1;
+
+    try {
+      const resp = await fetch('/run_noise_robust', {method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({file_path, contamination: cont, smoothing: smoothing, smooth_window: smooth_w})});
+      const j = await resp.json();
+      if (j.error) { alert('Error: ' + j.error); }
+      else {
+        // show a compact readout in a small alert/area
+        const area = document.getElementById('reduceFalseArea');
+        const s = j.summary || {};
+        area.innerHTML = `<strong>Robust detector:</strong> anomalies=${s.n_anomalies || 0} / ${s.n_samples || 0} (${((s.anomaly_rate||0)*100).toFixed(2)}%)`;
+        // also populate the anomDetails modal area separately without overwriting main anomSummary
+        try {
+          const details = document.getElementById('anomDetailsArea');
+          if (details && j.details) {
+            const list = j.details.map(d => `<div><strong>idx ${d.index}</strong> top: ${d.top_features.map(t=>t.feature+"("+t.z_score+")").join(', ')}</div>`).join('');
+            // append below existing details so we don't overwrite saved-model details
+            details.insertAdjacentHTML('beforeend', `<hr><div class="robust-local"><h6>Robust local detector top anomalous rows</h6>${list}</div>`);
+          }
+        } catch(e) { console.warn(e); }
+      }
+    } catch(e) { alert('Request failed: ' + e); }
+    reduceBtn.disabled = false;
+    reduceBtn.innerText = 'Reduce False Alerts';
   });
 }
 </script>

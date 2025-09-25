@@ -426,23 +426,52 @@ function onUploadLoaded(summary, file_path, stem) {
 		if (main) main.classList.remove('d-none');
 		// display uploaded summary in uploadSummaryArea
 		const area = document.getElementById('uploadSummaryArea');
-	if (area && summary) area.innerHTML = `<p>Rows: ${summary.n_rows} — Numeric: ${summary.n_numeric}</p><p>Cols: ${summary.numeric_cols ? summary.numeric_cols.slice(0,10).join(', ') : ''}</p><button id="runBtn" type="button" class="btn btn-success">Run Inference</button>`;
+	if (area && summary) {
+		area.innerHTML = `<p>Rows: ${summary.n_rows} — Numeric: ${summary.n_numeric}</p><p>Cols: ${summary.numeric_cols ? summary.numeric_cols.slice(0,10).join(', ') : ''}</p>
+			<div class="d-flex gap-2"><button id="runBtn" type="button" class="btn btn-success">Run Inference</button>
+			<button id="reduceFalseBtn" type="button" class="btn btn-outline-success">Reduce False Alerts</button></div>
+			<div id="reduceFalseArea" class="mt-2 small text-muted">Run the local robust detector to reduce noise-driven false alerts; this will not change existing model outputs.</div>`;
+
 		// rebind runBtn (since we replaced it)
 		const runBtn = document.getElementById('runBtn');
 		if (runBtn) runBtn.addEventListener('click', async () => {
-			// trigger the same logic as original run handler by dispatching a click on the original run button
 			runBtn.disabled = true;
 			runBtn.innerText = 'Running...';
-			// call run_inference endpoint
 			const resp = await fetch('/run_inference', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({file_path, stem})});
 			const j = await resp.json();
 			window.lastInferenceResult = j;
 			try { window.lastInferenceFilePath = file_path || window.lastUploadFilePath || null; } catch(e) { window.lastInferenceFilePath = null; }
-			// restore label
 			runBtn.disabled = false; runBtn.innerText = 'Run Inference';
-			// render full results (populates reportArea, summaries, charts and visuals)
 			try { if (typeof window.renderResults === 'function') window.renderResults(j, file_path); else console.warn('renderResults not defined'); } catch(e) { console.warn(e); }
 		});
+
+		// bind reduceFalseBtn
+		const reduceBtn = document.getElementById('reduceFalseBtn');
+		if (reduceBtn) reduceBtn.addEventListener('click', async () => {
+			reduceBtn.disabled = true; reduceBtn.innerText = 'Reducing...';
+			const cont = parseFloat(prompt('Contamination (fraction of anomalies, e.g. 0.01)', '0.01')) || 0.01;
+			const smoothing = confirm('Apply median smoothing to reduce high-frequency noise? (OK = yes, Cancel = no)');
+			const smooth_w = smoothing ? parseInt(prompt('Smoothing window (odd integer)', '3')) || 3 : 1;
+			try {
+				const resp = await fetch('/run_noise_robust', {method:'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({file_path, contamination: cont, smoothing: smoothing, smooth_window: smooth_w})});
+				const j = await resp.json();
+				if (j.error) { alert('Error: ' + j.error); }
+				else {
+					const area2 = document.getElementById('reduceFalseArea');
+					const s = j.summary || {};
+					if (area2) area2.innerHTML = `<strong>Robust detector:</strong> anomalies=${s.n_anomalies || 0} / ${s.n_samples || 0} (${((s.anomaly_rate||0)*100).toFixed(2)}%)`;
+					try {
+						const details = document.getElementById('anomDetailsArea');
+						if (details && j.details) {
+							const list = j.details.map(d => `<div><strong>idx ${d.index}</strong> top: ${d.top_features.map(t=>t.feature+"("+t.z_score+")").join(', ')}</div>`).join('');
+							details.insertAdjacentHTML('beforeend', `<hr><div class="robust-local"><h6>Robust local detector top anomalous rows</h6>${list}</div>`);
+						}
+					} catch(e) { console.warn(e); }
+				}
+			} catch(e) { alert('Request failed: ' + e); }
+			reduceBtn.disabled = false; reduceBtn.innerText = 'Reduce False Alerts';
+		});
+	}
 	} catch (e) { console.warn('onUploadLoaded failed', e); }
 }
 

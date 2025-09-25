@@ -5,6 +5,8 @@ import json
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import RobustScaler
 
 import sys
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,6 +138,41 @@ def run_anomaly_inference(model_path, scaler_path, df):
         return None, None
 
     Xs = scaler.transform(X)
+    scores = iso.decision_function(Xs)
+    preds = iso.predict(Xs)
+    return preds, scores
+
+
+def run_noise_robust_isof(df, contamination=0.01, n_estimators=200, max_samples='auto', smoothing=False, smooth_window=3, random_state=42):
+    """Train an IsolationForest on the uploaded data with robust scaling and optional smoothing.
+
+    This is intended as a noise-robust, local run that doesn't affect any saved/trained models or
+    existing predictions. Returns (preds, scores) where preds uses sklearn's convention (-1 anomaly, 1 normal).
+    """
+    proc = preprocess_pipeline(df, do_feature_engineering=False)
+    X = proc.select_dtypes(include=[np.number]).fillna(0)
+
+    if X.shape[1] == 0:
+        return None, None
+
+    # Optional smoothing to reduce high-frequency noise
+    if smoothing and isinstance(smooth_window, int) and smooth_window > 1:
+        try:
+            X = X.rolling(window=smooth_window, min_periods=1, center=True).median()
+            X = X.fillna(method='bfill').fillna(method='ffill').fillna(0)
+        except Exception:
+            # fallback to unsmoothed if rolling fails
+            X = X.fillna(0)
+
+    # Robust scale to reduce influence of extreme values
+    scaler = RobustScaler()
+    try:
+        Xs = scaler.fit_transform(X)
+    except Exception:
+        Xs = X.values
+
+    iso = IsolationForest(n_estimators=int(n_estimators), contamination=float(contamination), max_samples=max_samples, random_state=int(random_state))
+    iso.fit(Xs)
     scores = iso.decision_function(Xs)
     preds = iso.predict(Xs)
     return preds, scores
@@ -376,6 +413,34 @@ def main():
     if numcols:
         col1, col2 = st.columns(2)
 
+        # Noise-robust anomaly detection controls (doesn't overwrite existing model outputs)
+        with st.expander('Run noise-robust IsolationForest (local, does not change saved models)'):
+            cont = st.slider('Contamination (expected fraction of anomalies)', min_value=0.0, max_value=0.5, value=0.01, step=0.005)
+            n_est = st.number_input('n_estimators', min_value=10, max_value=2000, value=200, step=10)
+            max_samp = st.selectbox('max_samples', options=['auto', '1.0', '0.5', '0.25'], index=0)
+            smooth = st.checkbox('Apply median smoothing to reduce high-frequency noise', value=False)
+            smooth_w = st.slider('Smoothing window (odd integer)', min_value=1, max_value=21, value=3, step=2)
+            run_local = st.button('Run noise-robust detector')
+            st.markdown('This will run a temporary IsolationForest on the uploaded data using a RobustScaler and optional smoothing. It will not modify any stored models or their predictions.')
+            local_preds = None
+            local_scores = None
+            if run_local:
+                ms = max_samp
+                if ms != 'auto':
+                    try:
+                        ms = float(ms)
+                    except Exception:
+                        ms = 'auto'
+                with st.spinner('Running local noise-robust IsolationForest...'):
+                    try:
+                        local_preds, local_scores = run_noise_robust_isof(df, contamination=cont, n_estimators=n_est, max_samples=ms, smoothing=smooth, smooth_window=smooth_w)
+                        if local_preds is not None:
+                            st.success(f'Local detector complete: n_samples={len(local_preds)}, n_anomalies={(local_preds==-1).sum()}')
+                        else:
+                            st.warning('Local detector did not return predictions (no numeric features?).')
+                    except Exception as e:
+                        st.error(f'Local detector failed: {e}')
+
         with col1:
             st.markdown('**Anomaly & Time-Series Plot**')
             fig, ax = plt.subplots(figsize=(10, 6))
@@ -389,6 +454,13 @@ def main():
             if anom_preds is not None:
                 anomalies = df[anom_preds == -1]
                 ax.scatter(anomalies.index, anomalies[numcols[0]], color='red', s=50, zorder=5, label='Anomaly Detected')
+            # Overlay local noise-robust detector anomalies if run
+            try:
+                if 'local_preds' in locals() and local_preds is not None:
+                    local_anom = df[local_preds == -1]
+                    ax.scatter(local_anom.index, local_anom[numcols[0]], facecolors='none', edgecolors='green', s=80, linewidths=1.5, zorder=6, label='Robust Local Anomaly')
+            except Exception:
+                pass
             
             ax.legend()
             st.pyplot(fig)

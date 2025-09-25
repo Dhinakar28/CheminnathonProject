@@ -12,6 +12,7 @@ import pandas as pd
 
 from src.data_loader import load_any
 from src.inference import run_anomaly_inference, run_classifier_inference, run_rul_inference, generate_maintenance_report
+from src.inference import run_noise_robust_isof
 
 # The templates and static assets are located under app/ so point Flask there when
 # this module lives at repository root.
@@ -319,6 +320,38 @@ def plot_series():
         tb = traceback.format_exc()
         print('plot_series error:', tb)
         return jsonify({'error': str(e), 'trace': tb}), 500
+
+
+@app.route('/run_noise_robust', methods=['POST'])
+def run_noise_robust():
+    data = request.json or {}
+    file_path = data.get('file_path')
+    # parameters with defaults
+    contamination = data.get('contamination', 0.01)
+    n_estimators = data.get('n_estimators', 200)
+    max_samples = data.get('max_samples', 'auto')
+    smoothing = data.get('smoothing', False)
+    smooth_window = data.get('smooth_window', 3)
+
+    df = None
+    if file_path:
+        try:
+            p = Path(file_path)
+            if not p.is_absolute():
+                p = ROOT / file_path
+            df = load_any(p)
+        except Exception as e:
+            return jsonify({'error': f'failed to load dataset: {e}'}), 400
+
+    if df is None:
+        return jsonify({'error': 'dataset not found'}), 400
+
+    try:
+        res = run_noise_robust_isof(df, contamination=contamination, n_estimators=n_estimators, max_samples=max_samples, smoothing=smoothing, smooth_window=smooth_window)
+    except Exception as e:
+        return jsonify({'error': f'noise-robust inference failed: {e}'}), 500
+
+    return jsonify(res)
 
 
 
