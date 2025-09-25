@@ -58,6 +58,48 @@ def list_models_for_stem(stem: str):
     return res
 
 
+def find_best_stem_for_df(df: pd.DataFrame, min_overlap=0.5):
+    """
+    Heuristically find a model stem whose recorded feature_columns overlap with
+    the uploaded dataframe's numeric columns. Returns a tuple (best_stem_or_None, score)
+    where score is the fraction of model features found in the uploaded dataframe.
+    """
+    if not MODELS_DIR.exists():
+        return None, 0.0
+    numeric_cols = set(df.select_dtypes(include=[np.number]).columns.tolist())
+    best = None
+    best_score = 0.0
+    for stem_dir in MODELS_DIR.iterdir():
+        if not stem_dir.is_dir():
+            continue
+        # look for any meta json under subfolders
+        feature_sets = []
+        for meta in stem_dir.rglob('*__meta.json'):
+            try:
+                m = json.load(open(meta))
+                fc = m.get('feature_columns')
+                if isinstance(fc, list) and fc:
+                    feature_sets.append(set(fc))
+            except Exception:
+                continue
+        # combine feature sets (union) if multiple
+        if not feature_sets:
+            continue
+        combined = set().union(*feature_sets)
+        if not combined:
+            continue
+        inter = numeric_cols.intersection(combined)
+        # score = fraction of model features present in uploaded df
+        score = len(inter) / max(1, len(combined))
+        if score > best_score:
+            best_score = score
+            best = stem_dir.name
+    if best and best_score >= min_overlap:
+        return best, best_score
+    # return best candidate and its score even if below min_overlap (caller can decide)
+    return best, best_score
+
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
     uploaded_df = None
@@ -70,7 +112,9 @@ def index():
             tmp = TMP_UPLOAD / f.filename
             f.save(tmp)
             uploaded_df = load_any(tmp)
-            stem = tmp.stem
+            # try to find a matching model stem by feature overlap
+            guessed, gscore = find_best_stem_for_df(uploaded_df)
+            stem = guessed or tmp.stem
     elif selected_sample:
         path = SAMPLE_DIR / selected_sample
         if path.exists():
@@ -156,6 +200,31 @@ def run_inference():
     resp = {'anom': anom, 'clf': clf, 'rul': rul, 'report': report}
     # overall status: first report line (most important) if available
     resp['overall_status'] = report[0] if report and len(report) > 0 else 'Status unknown'
+    # determine maintenance level for UI (good / normal / critical)
+    level = 'good'
+    try:
+        rpt_text = ' '.join(report).upper() if report else ''
+        # start with keyword heuristics from report text
+        if any(k in rpt_text for k in ('CRITICAL', 'IMMINENT', 'IMMINENT FAILURE', 'URGENT')):
+            level = 'critical'
+        elif any(k in rpt_text for k in ('UNUSUAL', 'URGENT MAINTENANCE', 'ANOMALY')):
+            level = 'normal'
+        else:
+            level = 'good'
+        # also consider anomaly rate if available: >10% critical, >2% normal
+        try:
+            an_rate = 0.0
+            if anom and isinstance(anom, dict) and anom.get('summary'):
+                an_rate = float(anom['summary'].get('anomaly_rate', 0.0))
+            if an_rate > 0.10:
+                level = 'critical'
+            elif an_rate > 0.02 and level != 'critical':
+                level = 'normal'
+        except Exception:
+            pass
+    except Exception:
+        level = 'good'
+    resp['maintenance_level'] = level
 
     # convert numpy types to native Python for JSON
     def _make_json_safe(o):
@@ -193,7 +262,13 @@ def upload_file():
         return jsonify({'error': f'failed to load uploaded file: {e}'}), 400
     numcols = df.select_dtypes(include=[np.number]).columns.tolist()
     summary = {'n_rows': int(len(df)), 'n_numeric': len(numcols), 'numeric_cols': numcols[:12]}
-    return jsonify({'file_path': str(tmp), 'stem': tmp.stem, 'summary': summary})
+    # include model availability for the uploaded stem so the UI can update
+    # try to guess a better stem by feature overlap (return score too)
+    matched, mscore = find_best_stem_for_df(df, min_overlap=0.0)
+    chosen_stem = matched or tmp.stem
+    models = list_models_for_stem(chosen_stem)
+    avail = {k: bool(models.get(k)) for k in ['anomaly', 'classifier', 'rul']}
+    return jsonify({'file_path': str(tmp), 'stem': chosen_stem, 'matched_stem': matched, 'matched_score': float(mscore), 'summary': summary, 'models': avail})
 
 
 @app.route('/plot_series.png')

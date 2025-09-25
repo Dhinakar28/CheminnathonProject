@@ -26,7 +26,7 @@
     <div class="card">
       <div class="card-body">
         <h5 class="card-title">Model Availability</h5>
-        <ul>
+        <ul id="modelAvailability">
           <li>Anomaly: {{ 'Available' if models.anomaly else 'Not found' }}</li>
           <li>Classifier: {{ 'Available' if models.classifier else 'Not found' }}</li>
           <li>RUL: {{ 'Available' if models.rul else 'Not found' }}</li>
@@ -95,10 +95,17 @@
     </div>
 
     <div id="results" class="card d-none">
-      <div class="card-body">
+      <div class="card-body" id="maintenanceCard">
         <div class="d-flex justify-content-between align-items-center">
-          <h5 class="card-title">Maintenance Report</h5>
-          <div><button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#maintModal">View</button></div>
+          <div class="d-flex align-items-center">
+            <h5 class="card-title mb-0">Maintenance Report</h5>
+            <span id="maintenanceBadge" class="maint-badge bg-secondary text-white ms-3" style="margin-left:12px">UNKNOWN</span>
+          </div>
+          <div>
+            <button class="btn btn-sm btn-outline-primary me-2" data-bs-toggle="modal" data-bs-target="#maintModal">View</button>
+            <button class="btn btn-sm btn-outline-secondary me-2" onclick="try{window.showModal('visualsModal')}catch(e){console.warn(e)}">Visuals</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="try{window.showModal('summaryModal')}catch(e){console.warn(e)}">Summaries</button>
+          </div>
         </div>
         <div id="reportArea"></div>
         <div id="quickSummary" class="mt-2"></div>
@@ -120,23 +127,7 @@
       </div>
     </div>
 
-    <div id="visuals" class="mt-3 d-none">
-      <div class="card">
-        <div class="card-body">
-          <h5 class="card-title">Visuals</h5>
-          <div id="charts" class="row">
-            <div class="col-md-6">
-              <img id="seriesPlot" src="" class="img-fluid" alt="series">
-            </div>
-            <div class="col-md-6">
-              <canvas id="anomChart"></canvas>
-              <canvas id="clfChart" class="mt-3" style="max-height:220px"></canvas>
-              <canvas id="rulChart" class="mt-3" style="max-height:220px"></canvas>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- visuals are shown on demand in a modal (Visuals button) -->
 
   </div>
     </div> <!-- /#mainContent -->
@@ -231,6 +222,18 @@ if (uploadForm) {
       if (j.error) return alert(j.error);
       serverFilePath = j.file_path;
       serverStem = j.stem;
+      // update model availability list if provided
+      if (j.models) {
+        const el = document.getElementById('modelAvailability');
+        if (el) {
+          let html = `<li>Anomaly: ${j.models.anomaly ? 'Available' : 'Not found'}</li><li>Classifier: ${j.models.classifier ? 'Available' : 'Not found'}</li><li>RUL: ${j.models.rul ? 'Available' : 'Not found'}</li>`;
+          if (j.matched_stem) {
+            const score = (typeof j.matched_score !== 'undefined' && j.matched_score !== null) ? ` (${(j.matched_score*100).toFixed(0)}% match)` : '';
+            html += `<li class="text-muted">Matched stem: <strong>${j.matched_stem}</strong>${score}</li>`;
+          }
+          el.innerHTML = html;
+        }
+      }
       // show summary and unhide main content
       const summary = j.summary;
       try { onUploadLoaded(summary, j.file_path, j.stem); } catch(e) { console.warn('onUploadLoaded failed', e); }
@@ -267,7 +270,11 @@ if (runBtn) {
       method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({file_path, stem})
     });
   const j = await resp.json();
-  try { window.lastInferenceResult = j; } catch(e){console.warn(e);} 
+  try {
+    window.lastInferenceResult = j;
+    // persist the file path used for this inference so visuals modal can fetch the server PNG
+    try { window.lastInferenceFilePath = file_path || window.lastUploadFilePath || null; } catch(e) { window.lastInferenceFilePath = null; }
+  } catch(e){console.warn(e);} 
     runBtn.disabled = false;
     runBtn.innerText = 'Run Inference';
 
@@ -276,8 +283,9 @@ if (runBtn) {
       return;
     }
 
-    document.getElementById('results').classList.remove('d-none');
-    document.getElementById('visuals').classList.remove('d-none');
+  document.getElementById('results').classList.remove('d-none');
+  // the visuals placeholder used to exist; now visuals are a modal — only unhide if an element named 'visuals' exists
+  try { const v = document.getElementById('visuals'); if (v) v.classList.remove('d-none'); } catch(e) { /* no-op */ }
 
     // report
     const reportArea = document.getElementById('reportArea');
@@ -306,20 +314,26 @@ if (runBtn) {
   else tileAnom.innerText = '-';
     // show human-friendly label and percentage when possible
     if (j.clf && j.clf.summary) {
-      const topModes = j.clf.summary.top_modes || null;
-      if (topModes && topModes.length) {
-        const m = topModes[0];
-        const pct = j.clf.summary.n_samples ? ((m.count / j.clf.summary.n_samples) * 100).toFixed(1) : '0.0';
-        tileTop.innerText = `${m.mode} · ${m.count} (${pct}%)`;
-      } else if (j.clf.summary.top_class) {
-        // fallback to raw top_class
-        const tc = j.clf.summary.top_class;
-        const cnt = j.clf.summary.counts && j.clf.summary.counts[tc] ? j.clf.summary.counts[tc] : 0;
-        const pct = j.clf.summary.n_samples ? ((cnt / j.clf.summary.n_samples) * 100).toFixed(1) : '0.0';
-        tileTop.innerText = `${tc} · ${cnt} (${pct}%)`;
-      } else {
-        tileTop.innerText = '-';
-      }
+      try {
+        const cs = j.clf.summary;
+        if (cs.top_modes && cs.top_modes.length) {
+          const m = cs.top_modes[0];
+          const pct = cs.n_samples ? ((m.count / cs.n_samples) * 100).toFixed(1) : '0.0';
+          tileTop.innerText = `${m.mode} · ${m.count} (${pct}%)`;
+        } else if (cs.readable_counts && Object.keys(cs.readable_counts).length) {
+          const entries = Object.entries(cs.readable_counts).sort((a,b)=>b[1]-a[1]);
+          const top = entries[0];
+          const pct = cs.n_samples ? ((top[1] / cs.n_samples) * 100).toFixed(1) : '0.0';
+          tileTop.innerText = `${top[0]} · ${top[1]} (${pct}%)`;
+        } else if (typeof cs.top_class !== 'undefined' && cs.top_class !== null) {
+          const tc = cs.top_class;
+          const cnt = cs.counts && (cs.counts[String(tc)] || cs.counts[tc]) ? (cs.counts[String(tc)] || cs.counts[tc]) : 0;
+          const pct = cs.n_samples ? ((cnt / cs.n_samples) * 100).toFixed(1) : '0.0';
+          tileTop.innerText = `${tc} · ${cnt} (${pct}%)`;
+        } else {
+          tileTop.innerText = '-';
+        }
+      } catch(e) { tileTop.innerText = '-'; console.warn('tileTop render failed', e); }
     } else tileTop.innerText = '-';
   if (j.rul && j.rul.summary && j.rul.summary.median !== null) tileRUL.innerText = `${j.rul.summary.median.toFixed(1)} cycles`;
   else tileRUL.innerText = '-';
@@ -340,6 +354,24 @@ if (runBtn) {
   document.getElementById('anomSummary').innerHTML = j.anom ? `<pre>${JSON.stringify(j.anom.summary, null, 2)}</pre>` : 'No anomaly model';
   document.getElementById('clfSummary').innerHTML = j.clf ? `<pre>${JSON.stringify(j.clf.summary, null, 2)}</pre>` : 'No classifier model';
   document.getElementById('rulSummary').innerHTML = j.rul ? `<pre>${JSON.stringify(j.rul.summary, null, 2)}</pre>` : 'No RUL model';
+
+    // apply maintenance accent (green/orange/red) based on server-provided maintenance_level
+    try {
+      const maintCard = document.getElementById('maintenanceCard');
+      const maintBadge = document.getElementById('maintenanceBadge');
+      if (maintCard) {
+        maintCard.classList.remove('maint-good','maint-normal','maint-critical');
+        const lvl = j.maintenance_level || 'good';
+        if (lvl === 'critical') maintCard.classList.add('maint-critical');
+        else if (lvl === 'normal') maintCard.classList.add('maint-normal');
+        else maintCard.classList.add('maint-good');
+      }
+      if (maintBadge) {
+        if (j.maintenance_level === 'critical') { maintBadge.innerText = 'CRITICAL'; maintBadge.className = 'maint-badge bg-danger text-white'; }
+        else if (j.maintenance_level === 'normal') { maintBadge.innerText = 'NORMAL'; maintBadge.className = 'maint-badge bg-warning text-dark'; }
+        else { maintBadge.innerText = 'GOOD'; maintBadge.className = 'maint-badge bg-success text-white'; }
+      }
+    } catch(e) { console.warn('apply maintenance accent failed', e); }
 
     // series plot first numeric column if available
     try {
@@ -403,10 +435,88 @@ if (runBtn) {
       </div>
     </div>
   </div>
-</div>
 
-<!-- include Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <!-- Visuals modal -->
+        <div class="modal fade" id="visualsModal" tabindex="-1" aria-labelledby="visualsModalLabel" aria-hidden="true">
+          <div class="modal-dialog modal-xl modal-dialog-centered">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="visualsModalLabel">Visuals</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+              </div>
+              <div class="modal-body">
+                <div class="row">
+                  <div class="col-md-6">
+                    <img id="seriesPlot" src="" class="img-fluid" alt="series">
+                  </div>
+                  <div class="col-md-6">
+                    <h6>Anomaly pie</h6>
+                    <canvas id="anomChart"></canvas>
+                    <h6 class="mt-3">Classifier counts</h6>
+                    <canvas id="clfChart" style="max-height:220px"></canvas>
+                    <h6 class="mt-3">RUL histogram</h6>
+                    <canvas id="rulChart" style="max-height:220px"></canvas>
+                  </div>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Summaries tabbed modal -->
+      <div class="modal fade" id="summaryModal" tabindex="-1" aria-labelledby="summaryModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="summaryModalLabel">Model Summaries</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+              <ul class="nav nav-tabs" id="summaryTabs" role="tablist">
+                <li class="nav-item" role="presentation"><button class="nav-link active" id="tab-anom" data-bs-toggle="tab" data-bs-target="#pane-anom" type="button" role="tab">Anomaly</button></li>
+                <li class="nav-item" role="presentation"><button class="nav-link" id="tab-clf" data-bs-toggle="tab" data-bs-target="#pane-clf" type="button" role="tab">Classifier</button></li>
+                <li class="nav-item" role="presentation"><button class="nav-link" id="tab-rul" data-bs-toggle="tab" data-bs-target="#pane-rul" type="button" role="tab">RUL</button></li>
+              </ul>
+              <div class="tab-content mt-3">
+                <div class="tab-pane fade show active" id="pane-anom" role="tabpanel">
+                  <div class="row">
+                    <div class="col-md-6"><h6>Anomaly Summary</h6><div id="modalAnomSummary"></div></div>
+                    <div class="col-md-6"><h6>Anomaly Chart</h6><canvas id="modalAnomChart"></canvas></div>
+                  </div>
+                  <hr>
+                  <h6>Top anomalous rows</h6>
+                  <div id="modalAnomDetails"></div>
+                </div>
+                <div class="tab-pane fade" id="pane-clf" role="tabpanel">
+                  <div class="row">
+                    <div class="col-md-6"><h6>Classifier Summary</h6><div id="modalClfSummary"></div></div>
+                    <div class="col-md-6"><h6>Classifier Chart</h6><canvas id="modalClfChart"></canvas></div>
+                  </div>
+                  <hr>
+                  <h6>Top modes</h6>
+                  <div id="modalClfTopModes"></div>
+                </div>
+                <div class="tab-pane fade" id="pane-rul" role="tabpanel">
+                  <div class="row">
+                    <div class="col-md-6"><h6>RUL Summary</h6><div id="modalRulSummary"></div></div>
+                    <div class="col-md-6"><h6>RUL Histogram</h6><canvas id="modalRulChart"></canvas></div>
+                  </div>
+                  <hr>
+                  <h6>RUL sample predictions</h6>
+                  <div id="modalRulSamples"></div>
+                </div>
+              </div>
+            </div>
+            <div class="modal-footer">
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            </div>
+          </div>
+        </div>
+      </div>
+</div>
 
 {% endblock %}
 
