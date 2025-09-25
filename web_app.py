@@ -172,7 +172,7 @@ def run_inference():
     if not stem and file_path:
         try:
             stem = Path(file_path).stem
-        except Exception:
+        except Exception as e:
             stem = None
 
     models = list_models_for_stem(stem)
@@ -355,23 +355,7 @@ def run_noise_robust():
 
 
 
-# Sign-in page route
-from flask import session
-app.secret_key = 'your_secret_key_here'  # Change this to a secure key
 
-@app.route('/signin', methods=['GET', 'POST'])
-def signin():
-    error = None
-    if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        # Simple hardcoded check, replace with DB/user management in production
-        if username == 'codebreakers' and password == 'gawk123':
-            session['user'] = username
-            return redirect(url_for('index'))
-        else:
-            error = 'Invalid username or password.'
-    return render_template('signin.html', error=error)
 
 if __name__ == '__main__':
     app.run(debug=True, port=8502)
