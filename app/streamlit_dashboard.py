@@ -110,12 +110,31 @@ def run_anomaly_inference(model_path, scaler_path, df):
     scaler = joblib.load(scaler_path)
     proc = preprocess_pipeline(df, do_feature_engineering=False)
     X = proc.select_dtypes(include=[np.number]).fillna(0)
-    
-    # Ensure columns match the training data
+    # Try to align to training columns if meta is available next to model
+    try:
+        meta_path = Path(model_path).with_suffix('').parent / f"{Path(model_path).stem}__meta.json"
+        if not meta_path.exists():
+            meta_path = Path(model_path).parent / f"{Path(model_path).stem.replace('__isof','__meta')}.json"
+        meta = json.load(open(meta_path)) if meta_path.exists() else None
+    except Exception:
+        meta = None
+
+    if meta and isinstance(meta.get('feature_columns'), list):
+        trained_cols = meta['feature_columns']
+        missing = [c for c in trained_cols if c not in X.columns]
+        extra = [c for c in X.columns if c not in trained_cols]
+        if missing:
+            for c in missing:
+                X[c] = 0
+        if extra:
+            X = X.drop(columns=extra)
+        X = X[trained_cols]
+
+    # Ensure columns match the scaler
     if hasattr(scaler, 'n_features_in_') and X.shape[1] != scaler.n_features_in_:
         st.warning("Warning: The number of features in the loaded data doesn't match the scaler. Anomaly prediction may be unreliable.")
         return None, None
-    
+
     Xs = scaler.transform(X)
     scores = iso.decision_function(Xs)
     preds = iso.predict(Xs)
@@ -130,7 +149,27 @@ def run_classifier_inference(model_path, scaler_path, df, target_col=None):
         X = proc.drop(columns=[target_col])
     else:
         X = proc.select_dtypes(include=[np.number]).fillna(0)
-    
+    # Try to align to training columns via meta next to model/scaler
+    try:
+        meta_path = Path(model_path).with_suffix('').parent / f"{Path(model_path).stem}__meta.json"
+        if not meta_path.exists():
+            # fallback heuristics
+            meta_path = Path(model_path).parent / f"{Path(model_path).stem.replace('__rf_clf','__meta')}.json"
+        meta = json.load(open(meta_path)) if meta_path.exists() else None
+    except Exception:
+        meta = None
+
+    if meta and isinstance(meta.get('feature_columns'), list):
+        trained_cols = meta['feature_columns']
+        missing = [c for c in trained_cols if c not in X.columns]
+        extra = [c for c in X.columns if c not in trained_cols]
+        if missing:
+            for c in missing:
+                X[c] = 0
+        if extra:
+            X = X.drop(columns=extra)
+        X = X[trained_cols]
+
     if hasattr(scaler, 'n_features_in_') and X.shape[1] != scaler.n_features_in_:
         st.warning("Warning: The number of features in the loaded data doesn't match the scaler. Classification prediction may be unreliable.")
         return None, None
@@ -273,6 +312,10 @@ def main():
     st.subheader('Available Trained Models')
     st.json({k: bool(v) for k, v in models.items()})
 
+    # Diagnostic area: show feature counts from uploaded data
+    num_features = len(df.select_dtypes(include=[np.number]).columns)
+    st.caption(f"Uploaded dataset numeric features: {num_features}")
+
     # If no RUL model was found for this stem, offer available RUL models from other datasets
     if not models.get('rul'):
         avail = list_available_rul_models()
@@ -302,18 +345,25 @@ def main():
         if models['anomaly'] and models['anomaly'].get('model') and Path(models['anomaly']['model']).exists():
             try:
                 anom_preds, anom_scores = run_anomaly_inference(models['anomaly']['model'], models['anomaly']['scaler'], df)
+                # show anomaly diagnostics
+                if anom_preds is not None:
+                    st.write(f"Anomaly inference: n_samples={len(anom_preds)}, n_anomalies={(anom_preds==-1).sum()}")
             except Exception as e:
                 st.error(f'Anomaly inference failed: {e}')
                 
         if models['classifier'] and models['classifier'].get('model') and Path(models['classifier']['model']).exists():
             try:
                 clf_preds, probs = run_classifier_inference(models['classifier']['model'], models['classifier']['scaler'], df, target_col=models['classifier']['meta'].get('target'))
+                if clf_preds is not None:
+                    st.write(f"Classifier inference: n_samples={len(clf_preds)}, unique_predictions={len(set(map(int, clf_preds)))}")
             except Exception as e:
                 st.error(f'Classifier inference failed: {e}')
 
         if models['rul'] and models['rul'].get('model') and Path(models['rul']['model']).exists():
             try:
                 rul_preds = run_rul_inference(models['rul']['model'], models['rul']['scaler'], df, id_col=models['rul']['meta'].get('id_col'), cycle_col=models['rul']['meta'].get('cycle_col'))
+                if rul_preds is not None:
+                    st.write(f"RUL inference: n_samples={len(rul_preds)}, median_rul={np.median(rul_preds):.2f}")
             except Exception as e:
                 st.error(f'RUL inference failed: {e}')
 

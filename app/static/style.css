@@ -1,0 +1,22 @@
+/* Dashboard styles */
+body { background: #f4f6fb; color: #0f1724; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; }
+.site-header { background: linear-gradient(90deg,#0d6efd 0%,#6610f2 100%); color: white; padding: 18px 0; margin-bottom: 22px; border-radius: 0 0 12px 12px; }
+.site-header .title { font-size: 1.5rem; font-weight:700; }
+.site-header .subtitle { opacity: 0.95; font-size: .95rem; }
+.card { box-shadow: 0 10px 30px rgba(20,30,60,0.06); border-radius: 10px; }
+.card-title { color: #0b5ed7; font-weight:700 }
+#results pre { background:#ffffff; padding:10px; border-radius:6px; box-shadow: inset 0 1px 0 rgba(0,0,0,0.02); }
+.status-badge { display:inline-block; padding:6px 12px; border-radius:999px; font-weight:700; color:white; font-size:.85rem }
+.status-good { background:#28a745; }
+.status-warn { background:#ffc107; color:#111; }
+.status-crit { background:#dc3545; }
+.metric { font-size:1.35rem; font-weight:800; }
+.small-muted { color:#6c757d; }
+.summary-tile { border-left:6px solid rgba(0,0,0,0.04); padding:12px; }
+.chart-card canvas { max-height:280px; }
+.upload-note { font-size:0.9rem; color:#536179; }
+
+/* responsive tweaks */
+@media (max-width: 767px) {
+	.site-header .title { font-size:1.25rem }
+}

@@ -75,6 +75,8 @@ def train_classification(file: str, target: str, outdir: str = 'models_clf', tes
         y = y.round().astype(int)
 
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42, stratify=y if len(np.unique(y))>1 else None)
+    # record feature columns so we can align at inference time
+    feature_columns = list(X_train.columns)
     X_train_s, scaler = scale_features(X_train)
     X_test_s, _ = scale_features(X_test, scaler=scaler)
 
@@ -93,7 +95,7 @@ def train_classification(file: str, target: str, outdir: str = 'models_clf', tes
     joblib.dump(clf, model_path)
     joblib.dump(scaler, scaler_path)
     with open(meta_path, 'w') as f:
-        json.dump({'file': str(p), 'target': target_col, 'metrics': metrics, 'model_path': str(model_path), 'scaler_path': str(scaler_path)}, f, indent=2)
+        json.dump({'file': str(p), 'target': target_col, 'metrics': metrics, 'model_path': str(model_path), 'scaler_path': str(scaler_path), 'feature_columns': feature_columns}, f, indent=2)
 
     return {'model': str(model_path), 'scaler': str(scaler_path), 'metrics': metrics}
 
@@ -103,6 +105,8 @@ def train_anomaly_model(file: str, outdir: str = 'models_anom', contamination: f
     df = load_any(p)
     df_proc = preprocess_pipeline(df, do_feature_engineering=feature_engineering)
     X = df_proc.select_dtypes(include=[np.number]).fillna(0)
+    # record features present at training time
+    feature_columns = list(X.columns)
     Xs, scaler = scale_features(X)
     iso = IsolationForest(contamination=contamination, random_state=42)
     iso.fit(Xs)
@@ -118,7 +122,7 @@ def train_anomaly_model(file: str, outdir: str = 'models_anom', contamination: f
     scores = iso.decision_function(Xs)
     preds = iso.predict(Xs)
     n_anom = int((preds == -1).sum())
-    meta = {'file': str(p), 'n_samples': int(Xs.shape[0]), 'n_features': int(Xs.shape[1]), 'n_anomalies': n_anom}
+    meta = {'file': str(p), 'n_samples': int(Xs.shape[0]), 'n_features': int(Xs.shape[1]), 'n_anomalies': n_anom, 'feature_columns': feature_columns}
     with open(meta_path, 'w') as f:
         json.dump(meta, f, indent=2)
 

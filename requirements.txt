@@ -9,6 +9,6 @@ keras
 joblib
 matplotlib
 seaborn
+flask
 streamlit
 shap
-scipy

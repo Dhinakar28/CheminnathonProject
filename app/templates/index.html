@@ -1,0 +1,441 @@
+{% extends 'layout.html' %}
+{% block content %}
+<div class="row">
+  <div class="col-md-4">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Upload Dataset</h5>
+        <form id="uploadForm" method="post" enctype="multipart/form-data">
+          <input class="form-control mb-2" type="file" name="file" id="fileInput">
+          <button class="btn btn-primary" type="submit">Upload</button>
+        </form>
+        <hr>
+        <h6>Or choose a sample</h6>
+        <form id="sampleForm" method="post">
+          <select class="form-select mb-2" name="sample">
+            <option value="">-- select --</option>
+            {% for s in samples %}
+            <option value="{{ s }}">{{ s }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-secondary" type="submit">Load Sample</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Model Availability</h5>
+        <ul>
+          <li>Anomaly: {{ 'Available' if models.anomaly else 'Not found' }}</li>
+          <li>Classifier: {{ 'Available' if models.classifier else 'Not found' }}</li>
+          <li>RUL: {{ 'Available' if models.rul else 'Not found' }}</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-8">
+    <!-- mainContent is hidden until the user uploads a dataset -->
+    <div id="mainContent" class="d-none">
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Dataset Summary</h5>
+        <div id="uploadSummaryArea">
+        {% if summary %}
+          <p>Rows: {{ summary.n_rows }} — Numeric features: {{ summary.n_numeric }}</p>
+          <p>Numeric columns (sample): {{ summary.numeric_cols | join(', ') }}</p>
+          <button id="runBtn" class="btn btn-success">Run Inference</button>
+        {% else %}
+          <p class="text-muted">Upload a dataset or select a sample to see a summary.</p>
+        {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- key metrics tiles -->
+    <div id="metricsRow" class="row mb-3 d-none">
+      <div class="col-md-4">
+        <div class="card summary-tile">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+              <div class="small-muted">Anomaly Rate</div>
+              <div><button id="anomDrillBtn" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#anomModal">Details</button></div>
+            </div>
+            <div id="tileAnom" class="metric">-</div>
+            <div class="small-muted">% of rows flagged as anomalous</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card summary-tile">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+              <div class="small-muted">Top Predicted Failure Mode</div>
+              <div>
+                <button class="btn btn-sm btn-outline-secondary" data-bs-toggle="modal" data-bs-target="#clfModal" title="Details">Details</button>
+                <button class="btn btn-sm btn-outline-secondary ms-1" data-bs-toggle="modal" data-bs-target="#helpModal" title="What does this mean?">?
+                </button>
+              </div>
+            </div>
+            <div id="tileTopMode" class="metric">-</div>
+            <div class="small-muted">Most frequent predicted fault</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card summary-tile">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center"><div class="small-muted">Median RUL</div><div><button id="rulDrillBtn" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#rulModal">Details</button></div></div>
+            <div id="tileRUL" class="metric">-</div>
+            <div class="small-muted">Cycles until expected failure (median)</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="results" class="card d-none">
+      <div class="card-body">
+        <div class="d-flex justify-content-between align-items-center">
+          <h5 class="card-title">Maintenance Report</h5>
+          <div><button class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#maintModal">View</button></div>
+        </div>
+        <div id="reportArea"></div>
+        <div id="quickSummary" class="mt-2"></div>
+        <hr>
+        <div class="row">
+          <div class="col-md-4">
+            <h6>Anomaly Summary</h6>
+            <div id="anomSummary"></div>
+          </div>
+          <div class="col-md-4">
+            <h6>Classifier Summary</h6>
+            <div id="clfSummary"></div>
+          </div>
+          <div class="col-md-4">
+            <h6>RUL Summary</h6>
+            <div id="rulSummary"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="visuals" class="mt-3 d-none">
+      <div class="card">
+        <div class="card-body">
+          <h5 class="card-title">Visuals</h5>
+          <div id="charts" class="row">
+            <div class="col-md-6">
+              <img id="seriesPlot" src="" class="img-fluid" alt="series">
+            </div>
+            <div class="col-md-6">
+              <canvas id="anomChart"></canvas>
+              <canvas id="clfChart" class="mt-3" style="max-height:220px"></canvas>
+              <canvas id="rulChart" class="mt-3" style="max-height:220px"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+    </div> <!-- /#mainContent -->
+  </div>
+</div>
+
+<!-- Classifier detail modal -->
+<div class="modal fade" id="clfModal" tabindex="-1" aria-labelledby="clfModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="clfModalLabel">Classifier details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <h6>Classifier summary</h6>
+        <div id="clfDetailsArea"></div>
+        <hr>
+        <h6>Top predicted modes</h6>
+        <div id="clfTopModes"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- RUL detail modal -->
+<div class="modal fade" id="rulModal" tabindex="-1" aria-labelledby="rulModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="rulModalLabel">RUL details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <h6>RUL summary</h6>
+        <div id="rulDetailsArea"></div>
+        <hr>
+        <h6>Histogram (sample)</h6>
+        <canvas id="rulModalChart"></canvas>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Maintenance modal -->
+<div class="modal fade" id="maintModal" tabindex="-1" aria-labelledby="maintModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="maintModalLabel">Maintenance Report</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <h6>Overall status</h6>
+        <div id="maintStatus"></div>
+        <hr>
+        <h6>Parts likely requiring maintenance</h6>
+        <ul id="maintParts"></ul>
+        <hr>
+        <h6>Detailed report</h6>
+        <div id="maintDetails"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const runBtn = document.getElementById('runBtn');
+let serverFilePath = null;
+let serverStem = null;
+
+// handle file upload via AJAX
+const uploadForm = document.getElementById('uploadForm');
+if (uploadForm) {
+  uploadForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const fileInput = document.getElementById('fileInput');
+    if (!fileInput.files.length) return alert('choose a file first');
+    const fd = new FormData();
+    fd.append('file', fileInput.files[0]);
+      const resp = await fetch('/upload_file', {method:'POST', body: fd});
+      const j = await resp.json();
+      if (j.error) return alert(j.error);
+      serverFilePath = j.file_path;
+      serverStem = j.stem;
+      // show summary and unhide main content
+      const summary = j.summary;
+      try { onUploadLoaded(summary, j.file_path, j.stem); } catch(e) { console.warn('onUploadLoaded failed', e); }
+      alert('uploaded and loaded OK');
+  });
+}
+
+  // if the page was rendered with a server-side summary (sample load), unhide and populate
+  document.addEventListener('DOMContentLoaded', () => {
+    try {
+      {% if summary %}
+        const initialSummary = {{ summary | tojson }};
+        const stemName = {{ (stem|tojson) if stem else 'null' }};
+        try { onUploadLoaded(initialSummary, null, stemName); } catch(e) { console.warn(e); }
+      {% endif %}
+    } catch(e) { }
+  });
+
+if (runBtn) {
+  runBtn.addEventListener('click', async () => {
+    runBtn.disabled = true;
+    runBtn.innerText = 'Running...';
+    const sampleSelect = document.querySelector('select[name="sample"]');
+    const sample = sampleSelect ? sampleSelect.value : null;
+    const fileInput = document.getElementById('fileInput');
+    let file_path = serverFilePath;
+    let stem = serverStem || (sample ? sample.replace(/\.[^.]+$/, '') : null);
+    if (!file_path && sample) {
+      file_path = 'data/raw/' + sample;
+      stem = sample.replace(/\.[^.]+$/, '');
+    }
+
+    const resp = await fetch('/run_inference', {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({file_path, stem})
+    });
+  const j = await resp.json();
+  try { window.lastInferenceResult = j; } catch(e){console.warn(e);} 
+    runBtn.disabled = false;
+    runBtn.innerText = 'Run Inference';
+
+    if (j.error) {
+      alert(j.error);
+      return;
+    }
+
+    document.getElementById('results').classList.remove('d-none');
+    document.getElementById('visuals').classList.remove('d-none');
+
+    // report
+    const reportArea = document.getElementById('reportArea');
+    reportArea.innerHTML = j.report.map(r=>`<div>${r}</div>`).join('');
+
+    // quick textual summary
+    const quick = [];
+    if (j.anom && j.anom.summary) {
+      quick.push(`Anomaly rate: ${(j.anom.summary.anomaly_rate*100).toFixed(2)}% (${j.anom.summary.n_anomalies}/${j.anom.summary.n_samples})`);
+    }
+    if (j.rul && j.rul.summary) {
+      quick.push(`RUL median: ${j.rul.summary.median !== null ? j.rul.summary.median.toFixed(1) : 'N/A'} cycles; mean: ${j.rul.summary.mean !== null ? j.rul.summary.mean.toFixed(1) : 'N/A'}`);
+    }
+    if (j.clf && j.clf.summary) {
+      const top = j.clf.summary.top_class ? `Top predicted mode: ${j.clf.summary.top_class}` : 'No classifier output';
+      quick.push(top);
+    }
+  document.getElementById('quickSummary').innerHTML = quick.map(x=>`<div>${x}</div>`).join('');
+  // populate metric tiles
+  const metricsRow = document.getElementById('metricsRow');
+  if (metricsRow) metricsRow.classList.remove('d-none');
+  const tileAnom = document.getElementById('tileAnom');
+  const tileTop = document.getElementById('tileTopMode');
+  const tileRUL = document.getElementById('tileRUL');
+  if (j.anom && j.anom.summary) tileAnom.innerText = `${(j.anom.summary.anomaly_rate*100).toFixed(2)} %`;
+  else tileAnom.innerText = '-';
+    // show human-friendly label and percentage when possible
+    if (j.clf && j.clf.summary) {
+      const topModes = j.clf.summary.top_modes || null;
+      if (topModes && topModes.length) {
+        const m = topModes[0];
+        const pct = j.clf.summary.n_samples ? ((m.count / j.clf.summary.n_samples) * 100).toFixed(1) : '0.0';
+        tileTop.innerText = `${m.mode} · ${m.count} (${pct}%)`;
+      } else if (j.clf.summary.top_class) {
+        // fallback to raw top_class
+        const tc = j.clf.summary.top_class;
+        const cnt = j.clf.summary.counts && j.clf.summary.counts[tc] ? j.clf.summary.counts[tc] : 0;
+        const pct = j.clf.summary.n_samples ? ((cnt / j.clf.summary.n_samples) * 100).toFixed(1) : '0.0';
+        tileTop.innerText = `${tc} · ${cnt} (${pct}%)`;
+      } else {
+        tileTop.innerText = '-';
+      }
+    } else tileTop.innerText = '-';
+  if (j.rul && j.rul.summary && j.rul.summary.median !== null) tileRUL.innerText = `${j.rul.summary.median.toFixed(1)} cycles`;
+  else tileRUL.innerText = '-';
+
+    // update global status badge (green/yellow/red) using overall_status and anomaly rate
+    try {
+      const overall = j.overall_status || null;
+      const anRate = j.anom && j.anom.summary ? j.anom.summary.anomaly_rate : 0;
+      let level = 'good';
+      if (anRate > 0.1) level = 'crit';
+      else if (anRate > 0.02) level = 'warn';
+      // allow explicit overall_status override to critical keywords
+      if (overall && /CRITICAL|IMMINENT|URGENT/i.test(overall)) level = 'crit';
+      if (typeof setGlobalStatus === 'function') setGlobalStatus(overall || 'System status', level);
+    } catch (e) { console.warn(e); }
+
+    // details blocks
+  document.getElementById('anomSummary').innerHTML = j.anom ? `<pre>${JSON.stringify(j.anom.summary, null, 2)}</pre>` : 'No anomaly model';
+  document.getElementById('clfSummary').innerHTML = j.clf ? `<pre>${JSON.stringify(j.clf.summary, null, 2)}</pre>` : 'No classifier model';
+  document.getElementById('rulSummary').innerHTML = j.rul ? `<pre>${JSON.stringify(j.rul.summary, null, 2)}</pre>` : 'No RUL model';
+
+    // series plot first numeric column if available
+    try {
+      const numericCols = j.clf && j.clf.meta && j.clf.meta.feature_columns ? j.clf.meta.feature_columns : null;
+      const img = document.getElementById('seriesPlot');
+      if (file_path && numericCols && numericCols.length) {
+        img.src = `/plot_series.png?file_path=${encodeURIComponent(file_path)}&col=${encodeURIComponent(numericCols[0])}`;
+      } else if (file_path) {
+        img.src = `/plot_series.png?file_path=${encodeURIComponent(file_path)}&col=${encodeURIComponent('s1_vibration')}`;
+      }
+    } catch(e) { console.warn(e); }
+
+    // charts
+    try {
+      // anomaly pie
+      const ctx = document.getElementById('anomChart').getContext('2d');
+      const anom = j.anom;
+      const anomCount = anom && anom.summary ? anom.summary.n_anomalies : 0;
+      const normalCount = anom && anom.summary ? anom.summary.n_samples - anomCount : 0;
+      const dataA = {labels:['Normal','Anomaly'], datasets:[{data:[normalCount, anomCount], backgroundColor:['#4CAF50','#F44336']}]};
+      if (window.anomChartObj) window.anomChartObj.destroy();
+      window.anomChartObj = new Chart(ctx, {type:'pie', data: dataA});
+
+      // classifier bar chart
+      const clfCtx = document.getElementById('clfChart').getContext('2d');
+      const counts = j.clf && j.clf.summary && j.clf.summary.counts ? j.clf.summary.counts : {};
+      const labels = Object.keys(counts);
+      const values = labels.map(l=>counts[l]);
+      if (window.clfChartObj) window.clfChartObj.destroy();
+      window.clfChartObj = new Chart(clfCtx, {type:'bar', data:{labels, datasets:[{label:'Count', data:values, backgroundColor:'#2196F3'}]}});
+
+      // rul histogram
+      const rulCtx = document.getElementById('rulChart').getContext('2d');
+      const bins = j.rul && j.rul.summary ? j.rul.summary.hist_bins : [];
+      const countsR = j.rul && j.rul.summary ? j.rul.summary.hist_counts : [];
+      if (window.rulChartObj) window.rulChartObj.destroy();
+      window.rulChartObj = new Chart(rulCtx, {type:'bar', data:{labels:bins, datasets:[{label:'RUL counts', data:countsR, backgroundColor:'#9C27B0'}]}, options:{scales:{x:{ticks:{maxRotation:90, minRotation:30}}}}});
+    } catch(e) { console.warn(e); }
+
+  });
+}
+</script>
+
+<!-- Anomaly drill modal -->
+<div class="modal fade" id="anomModal" tabindex="-1" aria-labelledby="anomModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="anomModalLabel">Anomaly details</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <h6>Top anomalous rows (index and snapshot)</h6>
+        <div id="anomDetailsArea"></div>
+        <hr>
+        <h6>Suggested actions</h6>
+        <ul id="anomSuggestions"></ul>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- include Chart.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+{% endblock %}
+
+<!-- Help modal -->
+<div class="modal fade" id="helpModal" tabindex="-1" aria-labelledby="helpModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="helpModalLabel">What does "Top Predicted Failure Mode" mean?</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <p>This dashboard shows the most frequently predicted failure mode from the classifier when applied to the uploaded dataset.</p>
+        <p>Each mode is a short label describing a likely cause of failure detected by the model. Below are plain-English explanations:</p>
+        <ul>
+          <li><strong>Tool Wear Failure</strong>: The tool's cutting surface is worn; performance decreases and risk of failure rises.</li>
+          <li><strong>Heat Dissipation Failure</strong>: Excessive heat build-up, cooling issues or poor thermal management.</li>
+          <li><strong>Power Failure</strong>: Problems with electrical supply or unstable power causing faults.</li>
+          <li><strong>Overstrain Failure</strong>: Mechanical overloading or stress causing premature damage.</li>
+          <li><strong>Random Failure</strong>: Irregular faults not clearly attributable to a single mode.</li>
+          <li><strong>bearing</strong>: Bearing degradation or imminent bearing failure.</li>
+          <li><strong>wear</strong>: General mechanical wear across parts.</li>
+          <li><strong>electrical</strong>: Electrical subsystem faults.</li>
+        </ul>
+        <p>Use the counts and percentage next to the mode to understand how prevalent the predicted mode is across the dataset.</p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
