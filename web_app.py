@@ -322,40 +322,24 @@ def plot_series():
         return jsonify({'error': str(e), 'trace': tb}), 500
 
 
-@app.route('/run_noise_robust', methods=['POST'])
-def run_noise_robust():
-    data = request.json or {}
-    file_path = data.get('file_path')
-    # parameters with defaults
-    contamination = data.get('contamination', 0.01)
-    n_estimators = data.get('n_estimators', 200)
-    max_samples = data.get('max_samples', 'auto')
-    smoothing = data.get('smoothing', False)
-    smooth_window = data.get('smooth_window', 3)
 
-    df = None
-    if file_path:
-        try:
-            p = Path(file_path)
-            if not p.is_absolute():
-                p = ROOT / file_path
-            df = load_any(p)
-        except Exception as e:
-            return jsonify({'error': f'failed to load dataset: {e}'}), 400
+# Sign-in page route
+from flask import session
+app.secret_key = 'your_secret_key_here'  # Change this to a secure key
 
-    if df is None:
-        return jsonify({'error': 'dataset not found'}), 400
-
-    try:
-        res = run_noise_robust_isof(df, contamination=contamination, n_estimators=n_estimators, max_samples=max_samples, smoothing=smoothing, smooth_window=smooth_window)
-    except Exception as e:
-        return jsonify({'error': f'noise-robust inference failed: {e}'}), 500
-
-    return jsonify(res)
-
-
-
-
+@app.route('/signin', methods=['GET', 'POST'])
+def signin():
+    error = None
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        # Simple hardcoded check, replace with DB/user management in production
+        if username == 'codebreakers' and password == 'gawk123':
+            session['user'] = username
+            return redirect(url_for('index'))
+        else:
+            error = 'Invalid username or password.'
+    return render_template('signin.html', error=error)
 
 if __name__ == '__main__':
     app.run(debug=True, port=8502)
