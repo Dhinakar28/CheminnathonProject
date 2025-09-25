@@ -55,7 +55,7 @@
 
     <!-- key metrics tiles -->
     <div id="metricsRow" class="row mb-3 d-none">
-      <div class="col-md-4">
+      <div class="col-md-3">
         <div class="card summary-tile">
           <div class="card-body">
             <div class="d-flex justify-content-between align-items-center">
@@ -67,7 +67,7 @@
           </div>
         </div>
       </div>
-      <div class="col-md-4">
+      <div class="col-md-3">
         <div class="card summary-tile">
           <div class="card-body">
             <div class="d-flex justify-content-between align-items-center">
@@ -83,12 +83,24 @@
           </div>
         </div>
       </div>
-      <div class="col-md-4">
+      <div class="col-md-3">
         <div class="card summary-tile">
           <div class="card-body">
             <div class="d-flex justify-content-between align-items-center"><div class="small-muted">Median RUL</div><div><button id="rulDrillBtn" type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal" data-bs-target="#rulModal">Details</button></div></div>
             <div id="tileRUL" class="metric">-</div>
             <div class="small-muted">Cycles until expected failure (median)</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <div class="card summary-tile">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-center">
+              <div class="small-muted">Heat Percentage</div>
+              <div><button id="heatBtn" type="button" class="btn btn-sm btn-outline-danger">Show</button></div>
+            </div>
+            <div id="tileHeat" class="metric">-</div>
+            <div class="small-muted">Estimated equipment heat (%)</div>
           </div>
         </div>
       </div>
