@@ -1,3 +1,220 @@
+/* Exact login page overrides for pixel-perfect match */
+.exact-login {
+	font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+	background: #f7fafd;
+}
+.exact-brand {
+	margin-bottom: 0;
+}
+.brand-icon-box {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	margin-bottom: 18px;
+	position: relative;
+}
+.brand-icon-svg {
+	position: relative;
+	width: 56px;
+	height: 56px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.brand-badge {
+	position: absolute;
+	top: 0px;
+	right: -6px;
+	width: 18px;
+	height: 18px;
+	background: #0057ff;
+	border-radius: 50%;
+	border: 3px solid #fff;
+	box-shadow: 0 2px 8px rgba(0,87,255,0.18);
+	display: block;
+}
+.exact-brand h1 {
+	font-size: 2.1rem;
+	font-weight: 700;
+	color: #181c32;
+/* Exact login page overrides for pixel-perfect match */
+.exact-login {
+	font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+	background: #f7fafd;
+}
+.exact-brand {
+	margin-bottom: 0;
+}
+.brand-icon-box {
+	display: flex;
+	justify-content: center;
+	align-items: center;
+	margin-bottom: 18px;
+	position: relative;
+}
+.brand-icon-svg {
+	position: relative;
+	width: 56px;
+	height: 56px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+.brand-badge {
+	position: absolute;
+	top: 0px;
+	right: -6px;
+	width: 18px;
+	height: 18px;
+	background: #0057ff;
+	border-radius: 50%;
+	border: 3px solid #fff;
+	box-shadow: 0 2px 8px rgba(0,87,255,0.18);
+	display: block;
+}
+.exact-brand h1 {
+	font-size: 2.1rem;
+	font-weight: 700;
+	color: #181c32;
+	margin-bottom: 0.2em;
+}
+.brand-sub {
+	color: #7d8597;
+	font-size: 1.1rem;
+	margin-bottom: 0;
+}
+.exact-card {
+	background: #fff;
+	border-radius: 18px;
+	box-shadow: 0 8px 40px rgba(15,23,42,0.13);
+	border: none;
+	padding: 38px 36px 28px 36px;
+	min-width: 370px;
+	max-width: 420px;
+	margin-bottom: 0;
+}
+.exact-card h2 {
+	font-size: 1.5rem;
+	font-weight: 700;
+	color: #181c32;
+	margin-bottom: 0.2em;
+	text-align: center;
+}
+.card-sub {
+	color: #7d8597;
+	font-size: 1.05rem;
+	text-align: center;
+	margin-bottom: 1.2em;
+}
+.exact-form label {
+	font-size: 1rem;
+	font-weight: 600;
+	color: #181c32;
+	margin-bottom: 0.2em;
+}
+.exact-form input[type="email"], .exact-form input[type="password"] {
+	width: 100%;
+	padding: 13px 14px;
+	border-radius: 8px;
+	border: 1.5px solid #e3e8f0;
+	background: #f7fafd;
+	color: #181c32;
+	font-size: 1.05rem;
+	margin-bottom: 0.8em;
+	transition: border-color 0.2s;
+}
+.exact-form input[type="email"]:focus, .exact-form input[type="password"]:focus {
+	border-color: #0057ff;
+	outline: none;
+}
+.exact-pw-row {
+	display: flex;
+	align-items: center;
+	background: #f7fafd;
+	border-radius: 8px;
+	border: 1.5px solid #e3e8f0;
+	margin-bottom: 1.1em;
+	padding-right: 6px;
+}
+.exact-pw-row input[type="password"], .exact-pw-row input[type="text"] {
+	border: none;
+	background: transparent;
+	margin-bottom: 0;
+	flex: 1;
+	font-size: 1.05rem;
+	color: #181c32;
+	padding: 13px 14px 13px 14px;
+}
+.exact-pw-toggle {
+	background: transparent;
+	border: none;
+	cursor: pointer;
+	padding: 0 6px;
+	display: flex;
+	align-items: center;
+}
+.exact-cta {
+	width: 100%;
+	background: #0b1226;
+	color: #fff;
+	font-weight: 700;
+	font-size: 1.1rem;
+	border-radius: 8px;
+	border: none;
+	padding: 13px 0;
+	margin-top: 0.2em;
+	margin-bottom: 0.7em;
+	box-shadow: none;
+	transition: background 0.2s;
+}
+.exact-cta:hover {
+	background: #181c32;
+}
+.exact-footer {
+	border-top: 1px solid #e3e8f0;
+	margin-top: 1.2em;
+	padding-top: 1em;
+	text-align: center;
+	color: #7d8597;
+	font-size: 1rem;
+}
+.contact-link {
+	color: #0057ff;
+	text-decoration: none;
+	font-weight: 600;
+	margin-left: 2px;
+}
+.contact-link:hover {
+	text-decoration: underline;
+}
+.exact-features {
+	display: flex;
+	gap: 24px;
+	margin-top: 38px;
+	justify-content: center;
+}
+.exact-feature {
+	background: #fff;
+	border-radius: 14px;
+	box-shadow: 0 4px 24px rgba(15,23,42,0.09);
+	padding: 22px 24px 14px 24px;
+	min-width: 140px;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	font-size: 1.01rem;
+	color: #181c32;
+	font-weight: 600;
+	gap: 8px;
+}
+.exact-feature svg {
+	margin-bottom: 6px;
+}
+@media (max-width: 700px) {
+	.exact-card { min-width: 90vw; max-width: 98vw; padding: 18px 6vw 18px 6vw; }
+	.exact-features { flex-direction: column; gap: 16px; margin-top: 18px; }
+	.exact-feature { min-width: 0; width: 100%; }
+}
 /* Sign-in page styles */
 .signin-container {
 	max-width: 400px;
