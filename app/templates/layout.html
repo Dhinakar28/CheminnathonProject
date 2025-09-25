@@ -14,7 +14,7 @@
           <div class="title">Equipment Health Dashboard</div>
           <div class="subtitle">Predictive maintenance — anomaly detection, failure mode classification, and RUL</div>
         </div>
-        <div class="text-end">
+        <div class="text-end d-flex flex-column align-items-end" style="gap:8px;">
           <div id="globalStatus" class="status-badge status-good">System Healthy</div>
           <div class="small text-white-50">Local instance</div>
           <div style="margin-top:8px">
@@ -23,6 +23,77 @@
               <span class="form-check-label small">Dark mode</span>
             </label>
           </div>
+          {% if session.user %}
+          <div class="user-profile d-flex align-items-center" style="margin-top:8px; border:2px solid #000; border-radius:24px; padding:4px 12px; cursor:pointer; position:relative;" onclick="toggleProfileMenu()">
+            <span class="profile-icon" style="background:var(--accent);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:1.1rem;margin-right:8px;box-shadow:0 0 0 2px #fff;">
+              <span class="profile-initial">{{ session.user[0]|upper }}</span>
+            </span>
+    <style>
+      .profile-icon .profile-initial {
+        color: #222;
+        font-weight: 700;
+      }
+      body.dark .profile-icon {
+        background: #fff !important;
+        box-shadow: 0 0 0 2px var(--accent);
+      }
+      body.dark .profile-icon .profile-initial {
+        color: #222 !important;
+        font-weight: 900;
+        text-shadow: 0 0 2px #fff, 0 0 4px #fff;
+      }
+    </style>
+    <style>
+      body.dark .profile-icon {
+        background: #fff !important;
+        color: #222 !important;
+        box-shadow: 0 0 0 2px var(--accent);
+      }
+      body.dark .profile-icon span {
+        color: #222 !important;
+        font-weight: 700;
+        mix-blend-mode: normal;
+      }
+    </style>
+            <span class="profile-name" style="font-weight:600;color:var(--accent);">{{ session.user }}</span>
+            <span style="margin-left:8px; color:#222; font-size:1.2rem;">▼</span>
+            <div id="profileMenu" style="display:none; position:absolute; top:44px; right:0; background:var(--card-bg); border:2px solid #000; border-radius:8px; min-width:120px; z-index:1000; box-shadow:0 2px 8px rgba(0,0,0,0.12);">
+              <a href="/logout" class="logout-link" style="display:block; padding:10px 16px; color:var(--text); text-decoration:none; font-weight:600;">🚪 Logout</a>
+            </div>
+    <style>
+      .logout-link:hover {
+        background: var(--accent);
+        color: #fff !important;
+      }
+      body.dark .logout-link {
+        color: var(--text) !important;
+      }
+      body.dark #profileMenu {
+        background: var(--card-bg);
+        border-color: #fff;
+      }
+    </style>
+            </div>
+          </div>
+          <script>
+            function toggleProfileMenu() {
+              var menu = document.getElementById('profileMenu');
+              if(menu.style.display === 'none' || menu.style.display === '') {
+                menu.style.display = 'block';
+              } else {
+                menu.style.display = 'none';
+              }
+            }
+            // Hide menu when clicking outside
+            document.addEventListener('click', function(e) {
+              var profile = document.querySelector('.user-profile');
+              var menu = document.getElementById('profileMenu');
+              if(profile && !profile.contains(e.target)) {
+                if(menu) menu.style.display = 'none';
+              }
+            });
+          </script>
+          {% endif %}
         </div>
       </div>
     </header>

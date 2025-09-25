@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, send_file, jsonify
+from flask import Flask, render_template, request, redirect, url_for, send_file, jsonify, session
 from pathlib import Path
 import io
 import joblib
@@ -18,6 +18,13 @@ from src.inference import run_anomaly_inference, run_classifier_inference, run_r
 ROOT = Path(__file__).resolve().parent
 # point Flask to the app templates/static under the repository
 app = Flask(__name__, static_folder=str(ROOT / 'app' / 'static'), template_folder=str(ROOT / 'app' / 'templates'))
+app.secret_key = 'your_secret_key_here'  # Change this to a secure key
+
+# Logout route
+@app.route('/logout')
+def logout():
+    session.pop('user', None)
+    return redirect(url_for('signin'))
 MODELS_DIR = ROOT / 'models_auto_run'
 SAMPLE_DIR = ROOT / 'data' / 'raw'
 TMP_UPLOAD = ROOT / 'tmp_upload'
@@ -100,8 +107,12 @@ def find_best_stem_for_df(df: pd.DataFrame, min_overlap=0.5):
     return best, best_score
 
 
+
 @app.route('/', methods=['GET', 'POST'])
 def index():
+    # Redirect to sign-in if not authenticated
+    if 'user' not in session:
+        return redirect(url_for('signin'))
     uploaded_df = None
     stem = None
     selected_sample = request.form.get('sample') if request.method=='POST' else None
@@ -309,6 +320,25 @@ def plot_series():
         print('plot_series error:', tb)
         return jsonify({'error': str(e), 'trace': tb}), 500
 
+
+
+# Sign-in page route
+from flask import session
+app.secret_key = 'your_secret_key_here'  # Change this to a secure key
+
+@app.route('/signin', methods=['GET', 'POST'])
+def signin():
+    error = None
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        # Simple hardcoded check, replace with DB/user management in production
+        if username == 'admin' and password == 'password':
+            session['user'] = username
+            return redirect(url_for('index'))
+        else:
+            error = 'Invalid username or password.'
+    return render_template('signin.html', error=error)
 
 if __name__ == '__main__':
     app.run(debug=True, port=8502)
